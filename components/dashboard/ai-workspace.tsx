@@ -2,6 +2,8 @@
 
 import { FormEvent, useState } from "react";
 import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
+import type { ScanResult } from "@/lib/scan";
+import { RiskBadge } from "@/components/dashboard/risk-badge";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -14,6 +16,7 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
   const [modelMode, setModelMode] = useState<ModelMode>("Auto");
   const [status, setStatus] = useState<Status>("idle");
   const [output, setOutput] = useState<string | null>(null);
+  const [scan, setScan] = useState<ScanResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -28,6 +31,7 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
 
     setStatus("loading");
     setOutput(null);
+    setScan(null);
     setErrorMessage(null);
 
     try {
@@ -41,7 +45,7 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
       });
 
       const payload = (await response.json().catch(() => null)) as
-        | { output?: string; error?: string }
+        | { output?: string; scan?: ScanResult; error?: string }
         | null;
 
       if (!response.ok) {
@@ -51,6 +55,7 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
       }
 
       setOutput(payload?.output ?? "");
+      setScan(payload?.scan ?? null);
       setStatus("success");
       onGenerated?.();
     } catch {
@@ -118,11 +123,40 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
       ) : null}
 
       {status === "success" && output !== null ? (
-        <div className="mt-4">
-          <p className="mb-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Output</p>
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Output</p>
+            {scan ? (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-400">Risk</span>
+                <RiskBadge risk={scan.riskLevel} />
+              </div>
+            ) : null}
+          </div>
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
             {output || "No output returned."}
           </pre>
+          {scan && scan.findings.length > 0 ? (
+            <div>
+              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
+                Findings ({scan.findings.length})
+              </p>
+              <ul className="space-y-1">
+                {scan.findings.map((finding, index) => (
+                  <li
+                    key={`${finding.rule}-${index}`}
+                    className="flex items-center justify-between gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-300"
+                  >
+                    <span className="truncate">
+                      <span className="text-slate-400">{finding.source}</span> · {finding.rule} ·{" "}
+                      <span className="text-slate-100">{finding.match}</span>
+                    </span>
+                    <RiskBadge risk={finding.severity} />
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
         </div>
       ) : null}
     </section>

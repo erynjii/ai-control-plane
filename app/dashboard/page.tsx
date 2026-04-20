@@ -7,6 +7,7 @@ import { AIWorkspace } from "@/components/dashboard/ai-workspace";
 import { AssetHistory } from "@/components/dashboard/asset-history";
 import { Header } from "@/components/dashboard/header";
 import { PanelCard } from "@/components/dashboard/panel-card";
+import { ScannerSummary } from "@/components/dashboard/scanner-summary";
 import { Sidebar } from "@/components/dashboard/sidebar";
 
 type DashboardState = {
@@ -81,7 +82,7 @@ export default function DashboardPage() {
               title="Prompt Compliance Scanner"
               subtitle="Risk checks for generated content."
             >
-              <p className="text-sm text-slate-400">Scan engine not yet wired. Placeholder panel.</p>
+              <ScannerSummary refreshKey={assetRefreshKey} />
             </PanelCard>
 
             <PanelCard

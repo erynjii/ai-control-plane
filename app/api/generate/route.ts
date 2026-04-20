@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { MODEL_MODES, resolveModelForMode } from "@/lib/ai/model-mapping";
+import { scanContent } from "@/lib/scan";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const requestSchema = z.object({
@@ -72,6 +73,7 @@ export async function POST(request: Request) {
 
   const completionPayload = (await completionResponse.json()) as OpenAIResponsePayload;
   const outputText = getOutputText(completionPayload);
+  const scan = scanContent({ prompt, output: outputText });
   const now = new Date().toISOString();
 
   const { data: asset, error: insertError } = await supabase
@@ -83,16 +85,17 @@ export async function POST(request: Request) {
       output: outputText,
       model: selectedModel,
       status: "draft",
-      risk_level: "unknown",
+      risk_level: scan.riskLevel,
+      scan_findings: scan.findings,
       created_at: now,
       updated_at: now
     })
-    .select("id, workspace_id, user_id, prompt, output, model, status, risk_level, created_at, updated_at")
+    .select("id, workspace_id, user_id, prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
     .single();
 
   if (insertError) {
     return NextResponse.json({ error: "Failed to save generated asset." }, { status: 500 });
   }
 
-  return NextResponse.json({ output: outputText, asset });
+  return NextResponse.json({ output: outputText, asset, scan });
 }

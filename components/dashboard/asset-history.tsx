@@ -1,18 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-
-type Asset = {
-  id: string;
-  workspace_id: string;
-  prompt: string;
-  output: string;
-  model: string;
-  status: string;
-  risk_level: string;
-  created_at: string;
-  updated_at: string;
-};
+import type { Asset } from "@/lib/types";
+import { RiskBadge } from "@/components/dashboard/risk-badge";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -84,22 +74,26 @@ export function AssetHistory({ refreshKey = 0 }: AssetHistoryProps) {
 
       {assets.length > 0 ? (
         <ul className="max-h-80 space-y-2 overflow-auto">
-          {assets.map((asset) => (
-            <li
-              key={asset.id}
-              className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-sm text-slate-100">{asset.prompt}</span>
-                <span className="shrink-0 rounded-md border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
-                  {asset.status}
-                </span>
-              </div>
-              <p className="mt-1 text-xs text-slate-500">
-                {asset.model} · {new Date(asset.created_at).toLocaleString()}
-              </p>
-            </li>
-          ))}
+          {assets.map((asset) => {
+            const findingCount = asset.scan_findings?.length ?? 0;
+            return (
+              <li key={asset.id} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="truncate text-sm text-slate-100">{asset.prompt}</span>
+                  <div className="flex shrink-0 items-center gap-1">
+                    <RiskBadge risk={asset.risk_level} />
+                    <span className="rounded-md border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
+                      {asset.status}
+                    </span>
+                  </div>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">
+                  {asset.model} · {new Date(asset.created_at).toLocaleString()}
+                  {findingCount > 0 ? ` · ${findingCount} finding${findingCount === 1 ? "" : "s"}` : ""}
+                </p>
+              </li>
+            );
+          })}
         </ul>
       ) : null}
     </div>
