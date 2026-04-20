@@ -1,5 +1,9 @@
 import type { ScanFinding } from "@/lib/scan";
 
+export const ASSET_STATUSES = ["draft", "pending_review", "approved", "rejected"] as const;
+
+export type AssetStatus = (typeof ASSET_STATUSES)[number];
+
 export type Asset = {
   id: string;
   workspace_id: string;

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getCurrentUser, signOut } from "@/lib/supabase/auth";
 import { AIWorkspace } from "@/components/dashboard/ai-workspace";
+import { ApprovalQueue } from "@/components/dashboard/approval-queue";
 import { AssetHistory } from "@/components/dashboard/asset-history";
 import { Header } from "@/components/dashboard/header";
 import { PanelCard } from "@/components/dashboard/panel-card";
@@ -75,7 +76,7 @@ export default function DashboardPage() {
         <Sidebar items={SIDEBAR_ITEMS} />
 
         <div className="flex flex-col gap-4">
-          <AIWorkspace onGenerated={() => setAssetRefreshKey((key) => key + 1)} />
+          <AIWorkspace onAssetChanged={() => setAssetRefreshKey((key) => key + 1)} />
 
           <div className="grid gap-4 md:grid-cols-2">
             <PanelCard
@@ -89,7 +90,10 @@ export default function DashboardPage() {
               title="Content Approval Queue"
               subtitle="Pending review before publish."
             >
-              <p className="text-sm text-slate-400">Approval workflow coming soon.</p>
+              <ApprovalQueue
+                refreshKey={assetRefreshKey}
+                onAction={() => setAssetRefreshKey((key) => key + 1)}
+              />
             </PanelCard>
 
             <PanelCard

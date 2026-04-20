@@ -3,20 +3,25 @@
 import { FormEvent, useState } from "react";
 import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
 import type { ScanResult } from "@/lib/scan";
+import type { Asset } from "@/lib/types";
 import { RiskBadge } from "@/components/dashboard/risk-badge";
 
 type Status = "idle" | "loading" | "success" | "error";
+type SubmitStatus = "idle" | "loading" | "submitted" | "error";
 
 type AIWorkspaceProps = {
-  onGenerated?: () => void;
+  onAssetChanged?: () => void;
 };
 
-export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
+export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
   const [prompt, setPrompt] = useState("");
   const [modelMode, setModelMode] = useState<ModelMode>("Auto");
   const [status, setStatus] = useState<Status>("idle");
   const [output, setOutput] = useState<string | null>(null);
   const [scan, setScan] = useState<ScanResult | null>(null);
+  const [asset, setAsset] = useState<Asset | null>(null);
+  const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
@@ -32,6 +37,9 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
     setStatus("loading");
     setOutput(null);
     setScan(null);
+    setAsset(null);
+    setSubmitStatus("idle");
+    setSubmitError(null);
     setErrorMessage(null);
 
     try {
@@ -45,7 +53,7 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
       });
 
       const payload = (await response.json().catch(() => null)) as
-        | { output?: string; scan?: ScanResult; error?: string }
+        | { output?: string; scan?: ScanResult; asset?: Asset; error?: string }
         | null;
 
       if (!response.ok) {
@@ -56,11 +64,44 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
 
       setOutput(payload?.output ?? "");
       setScan(payload?.scan ?? null);
+      setAsset(payload?.asset ?? null);
       setStatus("success");
-      onGenerated?.();
+      onAssetChanged?.();
     } catch {
       setStatus("error");
       setErrorMessage("Network error. Please try again.");
+    }
+  };
+
+  const handleSubmitForReview = async () => {
+    if (!asset) return;
+
+    setSubmitStatus("loading");
+    setSubmitError(null);
+
+    try {
+      const response = await fetch(`/api/assets/${asset.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "pending_review" })
+      });
+
+      const payload = (await response.json().catch(() => null)) as
+        | { asset?: Asset; error?: string }
+        | null;
+
+      if (!response.ok || !payload?.asset) {
+        setSubmitStatus("error");
+        setSubmitError(payload?.error ?? "Failed to submit for review.");
+        return;
+      }
+
+      setAsset(payload.asset);
+      setSubmitStatus("submitted");
+      onAssetChanged?.();
+    } catch {
+      setSubmitStatus("error");
+      setSubmitError("Network error. Please try again.");
     }
   };
 
@@ -156,6 +197,32 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
                 ))}
               </ul>
             </div>
+          ) : null}
+
+          {asset ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3">
+              <p className="text-xs text-slate-400">
+                Status: <span className="text-slate-200">{asset.status}</span>
+              </p>
+              {asset.status === "draft" ? (
+                <button
+                  type="button"
+                  onClick={handleSubmitForReview}
+                  disabled={submitStatus === "loading"}
+                  className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {submitStatus === "loading" ? "Submitting..." : "Submit for Review"}
+                </button>
+              ) : (
+                <p className="text-xs text-slate-400">Submitted for review.</p>
+              )}
+            </div>
+          ) : null}
+
+          {submitStatus === "error" && submitError ? (
+            <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+              {submitError}
+            </p>
           ) : null}
         </div>
       ) : null}
