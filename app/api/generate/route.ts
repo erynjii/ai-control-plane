@@ -67,7 +67,19 @@ export async function POST(request: Request) {
   });
 
   if (!completionResponse.ok) {
-    return NextResponse.json({ error: "Failed to generate content." }, { status: 502 });
+    const errorBody = await completionResponse.text();
+    let detail = errorBody;
+    try {
+      const parsed = JSON.parse(errorBody) as { error?: { message?: string } };
+      detail = parsed.error?.message || errorBody;
+    } catch {
+      // Response was not JSON; keep raw body.
+    }
+    console.error("OpenAI request failed", { status: completionResponse.status, detail });
+    return NextResponse.json(
+      { error: `OpenAI ${completionResponse.status}: ${detail || "Unknown error"}` },
+      { status: 502 }
+    );
   }
 
   const completionPayload = (await completionResponse.json()) as OpenAIChatCompletionPayload;
