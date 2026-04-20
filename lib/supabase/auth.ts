@@ -18,6 +18,15 @@ export async function getCurrentUser() {
   return { user, error };
 }
 
+export async function getAccessToken() {
+  const {
+    data: { session },
+    error
+  } = await supabase.auth.getSession();
+
+  return { accessToken: session?.access_token ?? null, error };
+}
+
 export async function signOut() {
   return supabase.auth.signOut();
 }
