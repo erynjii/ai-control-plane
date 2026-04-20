@@ -10,21 +10,17 @@ const requestSchema = z.object({
   workspaceId: z.string().trim().min(1).default("default-workspace")
 });
 
-type OpenAIResponsePayload = {
-  output_text?: string;
-  output?: Array<{
-    content?: Array<{ text?: string }>;
+type OpenAIChatCompletionPayload = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
   }>;
 };
 
-function getOutputText(payload: OpenAIResponsePayload): string {
-  if (payload.output_text && payload.output_text.trim()) {
-    return payload.output_text.trim();
-  }
-
-  const nestedText = payload.output?.flatMap((entry) => entry.content ?? []).map((entry) => entry.text ?? "").join("\n").trim();
-
-  return nestedText || "No output returned.";
+function getOutputText(payload: OpenAIChatCompletionPayload): string {
+  const content = payload.choices?.[0]?.message?.content?.trim();
+  return content || "No output returned.";
 }
 
 export async function POST(request: Request) {
@@ -55,7 +51,7 @@ export async function POST(request: Request) {
 
   const selectedModel = resolveModelForMode(modelMode);
 
-  const completionResponse = await fetch("https://api.openai.com/v1/responses", {
+  const completionResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -63,7 +59,10 @@ export async function POST(request: Request) {
     },
     body: JSON.stringify({
       model: selectedModel,
-      input: `You are a marketing content assistant.\n\nUser prompt:\n${prompt}`
+      messages: [
+        { role: "system", content: "You are a marketing content assistant." },
+        { role: "user", content: prompt }
+      ]
     })
   });
 
@@ -71,7 +70,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Failed to generate content." }, { status: 502 });
   }
 
-  const completionPayload = (await completionResponse.json()) as OpenAIResponsePayload;
+  const completionPayload = (await completionResponse.json()) as OpenAIChatCompletionPayload;
   const outputText = getOutputText(completionPayload);
   const scan = scanContent({ prompt, output: outputText });
   const now = new Date().toISOString();
