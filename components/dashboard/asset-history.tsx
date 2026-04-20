@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { getAccessToken } from "@/lib/supabase/auth";
 
 type Asset = {
   id: string;
@@ -30,19 +29,8 @@ export function AssetHistory({ refreshKey = 0 }: AssetHistoryProps) {
     setStatus("loading");
     setErrorMessage(null);
 
-    const { accessToken, error: sessionError } = await getAccessToken();
-
-    if (sessionError || !accessToken) {
-      setStatus("error");
-      setErrorMessage("You must be signed in to load history.");
-      return;
-    }
-
     try {
-      const response = await fetch("/api/assets", {
-        method: "GET",
-        headers: { Authorization: `Bearer ${accessToken}` }
-      });
+      const response = await fetch("/api/assets", { method: "GET" });
 
       const payload = (await response.json().catch(() => null)) as
         | { assets?: Asset[]; error?: string }

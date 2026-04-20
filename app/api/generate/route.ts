@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { MODEL_MODES, resolveModelForMode } from "@/lib/ai/model-mapping";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const requestSchema = z.object({
   prompt: z.string().trim().min(1, "Prompt cannot be empty."),
   modelMode: z.enum(MODEL_MODES),
-  workspaceId: z.string().trim().min(1).default("default-workspace"),
-  accessToken: z.string().min(1, "Missing session token.")
+  workspaceId: z.string().trim().min(1).default("default-workspace")
 });
 
 type OpenAIResponsePayload = {
@@ -34,23 +33,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsedBody.error.issues[0]?.message || "Invalid request." }, { status: 400 });
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const openAiApiKey = process.env.OPENAI_API_KEY;
 
-  if (!supabaseUrl || !supabaseAnonKey || !openAiApiKey) {
+  if (!openAiApiKey) {
     return NextResponse.json({ error: "Server configuration is incomplete." }, { status: 500 });
   }
 
-  const { prompt, modelMode, workspaceId, accessToken } = parsedBody.data;
+  const { prompt, modelMode, workspaceId } = parsedBody.data;
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
-    }
-  });
+  const supabase = createSupabaseServerClient();
 
   const {
     data: { user },

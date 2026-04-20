@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { getAccessToken } from "@/lib/supabase/auth";
 import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
 
 type Status = "idle" | "loading" | "success" | "error";
@@ -31,22 +30,13 @@ export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
     setOutput(null);
     setErrorMessage(null);
 
-    const { accessToken, error: sessionError } = await getAccessToken();
-
-    if (sessionError || !accessToken) {
-      setStatus("error");
-      setErrorMessage("You must be signed in to generate content.");
-      return;
-    }
-
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: trimmedPrompt,
-          modelMode,
-          accessToken
+          modelMode
         })
       });
 
