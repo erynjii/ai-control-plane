@@ -6,7 +6,11 @@ import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
 
 type Status = "idle" | "loading" | "success" | "error";
 
-export function AIWorkspace() {
+type AIWorkspaceProps = {
+  onGenerated?: () => void;
+};
+
+export function AIWorkspace({ onGenerated }: AIWorkspaceProps = {}) {
   const [prompt, setPrompt] = useState("");
   const [modelMode, setModelMode] = useState<ModelMode>("Auto");
   const [status, setStatus] = useState<Status>("idle");
@@ -58,6 +62,7 @@ export function AIWorkspace() {
 
       setOutput(payload?.output ?? "");
       setStatus("success");
+      onGenerated?.();
     } catch {
       setStatus("error");
       setErrorMessage("Network error. Please try again.");

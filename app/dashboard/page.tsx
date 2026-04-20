@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getCurrentUser, signOut } from "@/lib/supabase/auth";
 import { AIWorkspace } from "@/components/dashboard/ai-workspace";
+import { AssetHistory } from "@/components/dashboard/asset-history";
 import { Header } from "@/components/dashboard/header";
 import { PanelCard } from "@/components/dashboard/panel-card";
 import { Sidebar } from "@/components/dashboard/sidebar";
@@ -23,6 +24,7 @@ export default function DashboardPage() {
     email: null,
     error: null
   });
+  const [assetRefreshKey, setAssetRefreshKey] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -72,7 +74,7 @@ export default function DashboardPage() {
         <Sidebar items={SIDEBAR_ITEMS} />
 
         <div className="flex flex-col gap-4">
-          <AIWorkspace />
+          <AIWorkspace onGenerated={() => setAssetRefreshKey((key) => key + 1)} />
 
           <div className="grid gap-4 md:grid-cols-2">
             <PanelCard
@@ -93,7 +95,7 @@ export default function DashboardPage() {
               title="Creation Audit Trail"
               subtitle="Every generation, tracked."
             >
-              <p className="text-sm text-slate-400">Asset history will appear here once listing is wired.</p>
+              <AssetHistory refreshKey={assetRefreshKey} />
             </PanelCard>
 
             <PanelCard
