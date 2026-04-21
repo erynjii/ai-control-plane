@@ -1,17 +1,41 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { ASSET_SELECT } from "@/lib/assets/select";
 
 const REVIEW_STATUSES = ["draft", "pending_review", "approved", "rejected"] as const;
+const MEDIA_TYPES = ["image", "video"] as const;
+const EDITABLE_STATUSES = new Set<string>(["draft", "pending_review"]);
 
 const patchSchema = z
   .object({
     status: z.enum(REVIEW_STATUSES).optional(),
-    promoted: z.boolean().optional()
+    promoted: z.boolean().optional(),
+    output: z.string().min(1).max(10000).optional(),
+    media_url: z.string().url().nullable().optional(),
+    media_type: z.enum(MEDIA_TYPES).nullable().optional(),
+    media_prompt: z.string().min(1).max(4000).nullable().optional()
   })
-  .refine((data) => data.status !== undefined || data.promoted !== undefined, {
-    message: "Must provide status or promoted."
-  });
+  .refine(
+    (data) =>
+      data.status !== undefined ||
+      data.promoted !== undefined ||
+      data.output !== undefined ||
+      data.media_url !== undefined ||
+      data.media_type !== undefined ||
+      data.media_prompt !== undefined,
+    { message: "Must provide at least one field to update." }
+  );
+
+type UpdatePayload = {
+  status?: string;
+  promoted?: boolean;
+  output?: string;
+  media_url?: string | null;
+  media_type?: string | null;
+  media_prompt?: string | null;
+  updated_at: string;
+};
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   const parsedBody = patchSchema.safeParse(await request.json().catch(() => ({})));
@@ -34,19 +58,42 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
-  const updatePayload: { status?: string; promoted?: boolean; updated_at: string } = {
-    updated_at: new Date().toISOString()
-  };
+  const needsContentCheck =
+    parsedBody.data.output !== undefined ||
+    parsedBody.data.media_url !== undefined ||
+    parsedBody.data.media_type !== undefined ||
+    parsedBody.data.media_prompt !== undefined;
+
+  if (needsContentCheck) {
+    const { data: existing, error: fetchError } = await supabase
+      .from("assets")
+      .select("status")
+      .eq("id", params.id)
+      .single();
+    if (fetchError || !existing) {
+      return NextResponse.json({ error: "Asset not found." }, { status: 404 });
+    }
+    if (!EDITABLE_STATUSES.has(existing.status)) {
+      return NextResponse.json(
+        { error: `Content cannot be edited while status is ${existing.status}.` },
+        { status: 409 }
+      );
+    }
+  }
+
+  const updatePayload: UpdatePayload = { updated_at: new Date().toISOString() };
   if (parsedBody.data.status !== undefined) updatePayload.status = parsedBody.data.status;
   if (parsedBody.data.promoted !== undefined) updatePayload.promoted = parsedBody.data.promoted;
+  if (parsedBody.data.output !== undefined) updatePayload.output = parsedBody.data.output;
+  if (parsedBody.data.media_url !== undefined) updatePayload.media_url = parsedBody.data.media_url;
+  if (parsedBody.data.media_type !== undefined) updatePayload.media_type = parsedBody.data.media_type;
+  if (parsedBody.data.media_prompt !== undefined) updatePayload.media_prompt = parsedBody.data.media_prompt;
 
   const { data, error } = await supabase
     .from("assets")
     .update(updatePayload)
     .eq("id", params.id)
-    .select(
-      "id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, destination, destination_status, destination_meta, published_at, failure_reason, created_at, updated_at"
-    )
+    .select(ASSET_SELECT)
     .single();
 
   if (error || !data) {

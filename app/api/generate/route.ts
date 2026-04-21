@@ -3,6 +3,7 @@ import { z } from "zod";
 import { MODEL_MODES, resolveModelForMode } from "@/lib/ai/model-mapping";
 import { scanContent } from "@/lib/scan";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { ASSET_SELECT } from "@/lib/assets/select";
 
 const DEFAULT_SYSTEM_PROMPT = "You are a marketing content assistant.";
 const MAX_CONVERSATION_TITLE_LENGTH = 80;
@@ -141,9 +142,7 @@ export async function POST(request: Request) {
       created_at: now,
       updated_at: now
     })
-    .select(
-      "id, workspace_id, user_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, destination, destination_status, destination_meta, published_at, failure_reason, created_at, updated_at"
-    )
+    .select(ASSET_SELECT)
     .single();
 
   if (insertError) {
