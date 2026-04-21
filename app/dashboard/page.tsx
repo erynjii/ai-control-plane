@@ -9,7 +9,7 @@ import { AssetHistory } from "@/components/dashboard/asset-history";
 import { Header } from "@/components/dashboard/header";
 import { PanelCard } from "@/components/dashboard/panel-card";
 import { ScannerSummary } from "@/components/dashboard/scanner-summary";
-import { Sidebar } from "@/components/dashboard/sidebar";
+import { Sidebar, type SidebarItem } from "@/components/dashboard/sidebar";
 
 type DashboardState = {
   loading: boolean;
@@ -17,7 +17,12 @@ type DashboardState = {
   error: string | null;
 };
 
-const SIDEBAR_ITEMS = ["Workspace", "Approvals", "Audit Trail", "Insights"];
+const SIDEBAR_ITEMS: SidebarItem[] = [
+  { label: "Workspace", targetId: "panel-workspace" },
+  { label: "Approvals", targetId: "panel-approvals" },
+  { label: "Audit Trail", targetId: "panel-audit" },
+  { label: "Insights", targetId: "panel-insights" }
+];
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -76,7 +81,9 @@ export default function DashboardPage() {
         <Sidebar items={SIDEBAR_ITEMS} />
 
         <div className="flex flex-col gap-4">
-          <AIWorkspace onAssetChanged={() => setAssetRefreshKey((key) => key + 1)} />
+          <div id="panel-workspace" className="scroll-mt-4">
+            <AIWorkspace onAssetChanged={() => setAssetRefreshKey((key) => key + 1)} />
+          </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <PanelCard
@@ -87,6 +94,7 @@ export default function DashboardPage() {
             </PanelCard>
 
             <PanelCard
+              id="panel-approvals"
               title="Content Approval Queue"
               subtitle="Pending review before publish."
             >
@@ -97,6 +105,7 @@ export default function DashboardPage() {
             </PanelCard>
 
             <PanelCard
+              id="panel-audit"
               title="Creation Audit Trail"
               subtitle="Every generation, tracked."
             >
@@ -104,6 +113,7 @@ export default function DashboardPage() {
             </PanelCard>
 
             <PanelCard
+              id="panel-insights"
               title="Revenue Insights"
               subtitle="Usage and attribution signals."
             >

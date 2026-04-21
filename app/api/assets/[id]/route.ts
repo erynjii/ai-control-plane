@@ -35,7 +35,7 @@ export async function PATCH(request: Request, { params }: { params: { id: string
       updated_at: new Date().toISOString()
     })
     .eq("id", params.id)
-    .select("id, workspace_id, prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
+    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
     .single();
 
   if (error || !data) {
