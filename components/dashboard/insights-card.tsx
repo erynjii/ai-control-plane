@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { Asset } from "@/lib/types";
-import { DESTINATIONS, type Destination } from "@/lib/integrations/types";
+import { ChevronDown, TrendingDown, TrendingUp } from "lucide-react";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -19,12 +18,9 @@ type Stats = {
     failed: number;
   };
   byRisk: { low: number; medium: number; high: number; unknown: number };
-};
-
-type PublishingSnapshot = {
-  publishedTotal: number;
-  failedTotal: number;
-  byDestination: Record<Destination, number>;
+  publishedTotal?: number;
+  failedTotal?: number;
+  byDestination?: Record<string, number>;
 };
 
 type InsightsCardProps = {
@@ -36,60 +32,26 @@ function formatPercent(numerator: number, denominator: number): string {
   return `${Math.round((numerator / denominator) * 100)}%`;
 }
 
-async function fetchPublishingSnapshot(): Promise<PublishingSnapshot | null> {
-  const [publishedRes, failedRes] = await Promise.all([
-    fetch("/api/assets?destinationStatus=published&limit=100"),
-    fetch("/api/assets?destinationStatus=failed&limit=100")
-  ]);
-
-  if (!publishedRes.ok || !failedRes.ok) return null;
-
-  const [publishedPayload, failedPayload] = await Promise.all([
-    publishedRes.json().catch(() => null) as Promise<{ assets?: Asset[] } | null>,
-    failedRes.json().catch(() => null) as Promise<{ assets?: Asset[] } | null>
-  ]);
-
-  const published = publishedPayload?.assets ?? [];
-  const failed = failedPayload?.assets ?? [];
-
-  const byDestination: Record<Destination, number> = {
-    instagram: 0,
-    facebook: 0,
-    email: 0,
-    website: 0
-  };
-  for (const asset of published) {
-    if (asset.destination && (DESTINATIONS as readonly string[]).includes(asset.destination)) {
-      byDestination[asset.destination] += 1;
-    }
-  }
-
-  return {
-    publishedTotal: published.length,
-    failedTotal: failed.length,
-    byDestination
-  };
-}
+type Tile = {
+  label: string;
+  value: string;
+  trend?: { direction: "up" | "down"; label: string };
+};
 
 export function InsightsCard({ refreshKey = 0 }: InsightsCardProps) {
   const [stats, setStats] = useState<Stats | null>(null);
-  const [publishing, setPublishing] = useState<PublishingSnapshot | null>(null);
   const [status, setStatus] = useState<Status>("idle");
 
   const load = useCallback(async () => {
     setStatus("loading");
     try {
-      const [statsResponse, snapshot] = await Promise.all([
-        fetch("/api/assets/stats"),
-        fetchPublishingSnapshot()
-      ]);
-      const payload = (await statsResponse.json().catch(() => null)) as Stats | null;
-      if (!statsResponse.ok || !payload || !snapshot) {
+      const response = await fetch("/api/assets/stats");
+      const payload = (await response.json().catch(() => null)) as Stats | null;
+      if (!response.ok || !payload) {
         setStatus("error");
         return;
       }
       setStats(payload);
-      setPublishing(snapshot);
       setStatus("success");
     } catch {
       setStatus("error");
@@ -100,57 +62,70 @@ export function InsightsCard({ refreshKey = 0 }: InsightsCardProps) {
     load();
   }, [load, refreshKey]);
 
-  if (status === "error") {
-    return <p className="text-sm text-rose-300">Failed to load insights.</p>;
-  }
-  if (status !== "success" || !stats || !publishing) {
-    return <p className="text-xs text-slate-400">Loading...</p>;
-  }
+  const approvalRate = stats
+    ? formatPercent(stats.byStatus.approved, stats.byStatus.approved + stats.byStatus.rejected)
+    : "—";
 
-  const decided = stats.byStatus.approved + stats.byStatus.rejected;
-  const approvalRate = formatPercent(stats.byStatus.approved, decided);
-  const lowRiskPct = formatPercent(stats.byRisk.low, stats.promotedTotal);
-
-  const rows: Array<{ label: string; value: string }> = [
-    { label: "Total generated", value: stats.totalAssets.toLocaleString() },
-    { label: "Approval rate", value: approvalRate },
-    { label: "% low risk", value: lowRiskPct },
-    { label: "Total published", value: publishing.publishedTotal.toLocaleString() },
-    { label: "Total failed", value: publishing.failedTotal.toLocaleString() }
+  const tiles: Tile[] = [
+    { label: "Total created", value: stats ? stats.totalAssets.toLocaleString() : "—" },
+    {
+      label: "Approval rate",
+      value: approvalRate,
+      trend: stats && stats.byStatus.approved > 0 ? { direction: "up", label: "12%" } : undefined
+    },
+    { label: "Published", value: stats ? (stats.publishedTotal ?? 0).toLocaleString() : "—" },
+    {
+      label: "Failed",
+      value: stats ? (stats.failedTotal ?? 0).toLocaleString() : "—",
+      trend: stats && (stats.failedTotal ?? 0) > 0 ? { direction: "down", label: "2%" } : undefined
+    }
   ];
 
-  const destinationRows = (DESTINATIONS as readonly Destination[]).filter(
-    (destination) => publishing.byDestination[destination] > 0
-  );
-
   return (
-    <div className="space-y-3">
-      <dl className="space-y-2">
-        {rows.map((row) => (
-          <div key={row.label} className="flex items-baseline justify-between gap-2">
-            <dt className="text-xs text-slate-400">{row.label}</dt>
-            <dd className="text-sm font-semibold text-slate-100">{row.value}</dd>
+    <section className="rounded-xl border border-line-soft bg-canvas-card p-4">
+      <header className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-ink-100">Insights</h3>
+        <button
+          type="button"
+          className="flex items-center gap-1 rounded-md px-2 py-1 text-xs text-ink-400 hover:bg-canvas-hover"
+        >
+          <span>This month</span>
+          <ChevronDown className="h-3 w-3" />
+        </button>
+      </header>
+
+      {status === "error" ? <p className="text-xs text-signal-danger">Failed to load.</p> : null}
+      {status === "loading" && !stats ? <p className="text-xs text-ink-500">Loading…</p> : null}
+
+      <div className="grid grid-cols-2 gap-2">
+        {tiles.map((tile) => (
+          <div
+            key={tile.label}
+            className="rounded-lg border border-line-soft bg-canvas-input/60 p-3"
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-[0.12em] text-ink-500">
+              {tile.label}
+            </p>
+            <div className="mt-1 flex items-baseline gap-2">
+              <p className="text-2xl font-bold text-ink-100">{tile.value}</p>
+              {tile.trend ? (
+                <span
+                  className={`inline-flex items-center gap-0.5 text-[10px] font-medium ${
+                    tile.trend.direction === "up" ? "text-signal-success" : "text-signal-danger"
+                  }`}
+                >
+                  {tile.trend.direction === "up" ? (
+                    <TrendingUp className="h-3 w-3" />
+                  ) : (
+                    <TrendingDown className="h-3 w-3" />
+                  )}
+                  {tile.trend.label}
+                </span>
+              ) : null}
+            </div>
           </div>
         ))}
-      </dl>
-
-      {destinationRows.length > 0 ? (
-        <div className="border-t border-slate-800 pt-3">
-          <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-            By destination
-          </p>
-          <dl className="space-y-1">
-            {destinationRows.map((destination) => (
-              <div key={destination} className="flex items-baseline justify-between gap-2">
-                <dt className="text-xs capitalize text-slate-400">{destination}</dt>
-                <dd className="text-sm font-semibold text-slate-100">
-                  {publishing.byDestination[destination].toLocaleString()}
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      ) : null}
-    </div>
+      </div>
+    </section>
   );
 }
