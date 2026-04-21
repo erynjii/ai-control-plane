@@ -4,13 +4,40 @@ import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, ExternalLink, Image as ImageIcon, Video, XCircle } from "lucide-react";
 import type { Asset, AssetStatus } from "@/lib/types";
 import { RiskBadge } from "@/components/dashboard/risk-badge";
+import { DestinationBadge, StatusBadge } from "@/components/dashboard/destination-badge";
 
-type Status = "idle" | "loading" | "success" | "error";
+type LoadStatus = "idle" | "loading" | "success" | "error";
+
+type TabId = "pending" | "approved" | "published" | "all";
+
+type TabDef = {
+  id: TabId;
+  label: string;
+  filterStatus: AssetStatus | null;
+  showsCount: boolean;
+};
+
+const TABS: TabDef[] = [
+  { id: "pending", label: "Pending", filterStatus: "pending_review", showsCount: true },
+  { id: "approved", label: "Approved", filterStatus: "approved", showsCount: true },
+  { id: "published", label: "Published", filterStatus: "published", showsCount: true },
+  { id: "all", label: "All", filterStatus: null, showsCount: false }
+];
+
+type Counts = { pending: number; approved: number; published: number };
 
 type ApprovalsViewProps = {
   refreshKey?: number;
   onAction?: () => void;
   onOpenAsset?: (asset: Asset) => void;
+};
+
+type StatsPayload = {
+  byStatus?: {
+    pending_review?: number;
+    approved?: number;
+    published?: number;
+  };
 };
 
 function formatDateTime(iso: string): string {
@@ -49,16 +76,70 @@ function Thumbnail({ asset }: { asset: Asset }) {
   );
 }
 
+function emptyCopy(tab: TabId): { title: string; body: string } {
+  switch (tab) {
+    case "pending":
+      return {
+        title: "No approvals pending",
+        body: "Drafts sent for approval will show up here. Anything approved moves on to publishing."
+      };
+    case "approved":
+      return {
+        title: "Nothing approved yet",
+        body: "Approved items will appear here until they’re assigned a destination and published."
+      };
+    case "published":
+      return {
+        title: "Nothing published yet",
+        body: "Once items are published to a destination they’ll show up here."
+      };
+    case "all":
+    default:
+      return {
+        title: "No assets in the approval flow",
+        body: "Promoted drafts, approvals, and publications will all be listed here."
+      };
+  }
+}
+
+function fetchUrlForTab(tab: TabDef): string {
+  const params = new URLSearchParams();
+  params.set("promoted", "true");
+  params.set("limit", "100");
+  if (tab.filterStatus) params.set("status", tab.filterStatus);
+  return `/api/assets?${params.toString()}`;
+}
+
 export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: ApprovalsViewProps) {
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [status, setStatus] = useState<Status>("idle");
+  const [status, setStatus] = useState<LoadStatus>("idle");
   const [pendingId, setPendingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabId>("pending");
+  const [counts, setCounts] = useState<Counts>({ pending: 0, approved: 0, published: 0 });
 
-  const load = useCallback(async () => {
+  const loadCounts = useCallback(async () => {
+    try {
+      const response = await fetch("/api/assets/stats");
+      if (!response.ok) return;
+      const payload = (await response.json().catch(() => null)) as StatsPayload | null;
+      const byStatus = payload?.byStatus ?? {};
+      setCounts({
+        pending: byStatus.pending_review ?? 0,
+        approved: byStatus.approved ?? 0,
+        published: byStatus.published ?? 0
+      });
+    } catch {
+      // non-fatal — badges just won't update
+    }
+  }, []);
+
+  const loadList = useCallback(async (tabId: TabId) => {
+    const tab = TABS.find((t) => t.id === tabId);
+    if (!tab) return;
     setStatus("loading");
     try {
-      const response = await fetch("/api/assets?status=pending_review&promoted=true&limit=50");
+      const response = await fetch(fetchUrlForTab(tab));
       const payload = (await response.json().catch(() => null)) as { assets?: Asset[] } | null;
       if (!response.ok) {
         setStatus("error");
@@ -72,8 +153,9 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
   }, []);
 
   useEffect(() => {
-    load();
-  }, [load, refreshKey]);
+    loadCounts();
+    loadList(activeTab);
+  }, [loadCounts, loadList, activeTab, refreshKey]);
 
   const transition = async (id: string, next: AssetStatus) => {
     setPendingId(id);
@@ -90,13 +172,23 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
         return;
       }
       setAssets((current) => current.filter((asset) => asset.id !== id));
+      setCounts((current) => ({ ...current, pending: Math.max(0, current.pending - 1) }));
       onAction?.();
+      // Refresh counts so Approved tab reflects the new approval.
+      loadCounts();
     } catch {
       setActionError("Network error. Please try again.");
     } finally {
       setPendingId(null);
     }
   };
+
+  const refresh = () => {
+    loadCounts();
+    loadList(activeTab);
+  };
+
+  const empty = emptyCopy(activeTab);
 
   return (
     <div className="mx-auto flex w-full max-w-[980px] flex-col gap-5 pb-10">
@@ -110,13 +202,58 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
         </div>
         <button
           type="button"
-          onClick={load}
+          onClick={refresh}
           disabled={status === "loading"}
           className="rounded-lg border border-line-soft px-3 py-2 text-xs text-ink-300 hover:bg-canvas-hover disabled:cursor-not-allowed disabled:opacity-60"
         >
           {status === "loading" ? "Refreshing…" : "Refresh"}
         </button>
       </header>
+
+      <div
+        role="tablist"
+        aria-label="Approval status filter"
+        className="flex gap-1 border-b border-line-soft"
+      >
+        {TABS.map((tab) => {
+          const isActive = tab.id === activeTab;
+          const count =
+            tab.id === "pending"
+              ? counts.pending
+              : tab.id === "approved"
+              ? counts.approved
+              : tab.id === "published"
+              ? counts.published
+              : null;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={isActive}
+              onClick={() => setActiveTab(tab.id)}
+              className={`relative inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium ${
+                isActive
+                  ? "text-ink-100"
+                  : "text-ink-400 hover:text-ink-100"
+              }`}
+            >
+              <span>{tab.label}</span>
+              {tab.showsCount && count !== null ? (
+                <span className="inline-flex min-w-[20px] items-center justify-center rounded-full bg-accent-cyan/20 px-1.5 text-[10px] font-semibold text-accent-cyan">
+                  {count}
+                </span>
+              ) : null}
+              {isActive ? (
+                <span
+                  aria-hidden
+                  className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-accent-cyan"
+                />
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
 
       {actionError ? (
         <p className="rounded-md border border-signal-danger/40 bg-signal-danger/10 px-3 py-2 text-xs text-signal-danger">
@@ -126,16 +263,14 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
 
       {status === "error" ? (
         <p className="rounded-md border border-signal-danger/40 bg-signal-danger/10 px-3 py-2 text-sm text-signal-danger">
-          Failed to load approvals.
+          Failed to load assets.
         </p>
       ) : null}
 
       {status === "success" && assets.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-line-soft bg-canvas-card px-6 py-12 text-center">
-          <p className="text-sm font-medium text-ink-100">No approvals pending</p>
-          <p className="text-xs text-ink-500">
-            Drafts sent for approval will show up here. Anything approved moves on to publishing.
-          </p>
+          <p className="text-sm font-medium text-ink-100">{empty.title}</p>
+          <p className="text-xs text-ink-500">{empty.body}</p>
         </div>
       ) : null}
 
@@ -147,6 +282,8 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
         {assets.map((asset) => {
           const isPending = pendingId === asset.id;
           const captionPreview = asset.output.replace(/\s+/g, " ").slice(0, 220);
+          const showPublishedAt = activeTab === "published" && asset.published_at;
+          const showReviewButtons = activeTab === "pending";
           return (
             <li
               key={asset.id}
@@ -159,14 +296,16 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
                     <div className="min-w-0">
                       <p className="truncate text-sm font-semibold text-ink-100">{asset.prompt}</p>
                       <p className="mt-0.5 text-xs text-ink-500">
-                        {asset.model} · {formatDateTime(asset.created_at)}
+                        {asset.model} ·{" "}
+                        {showPublishedAt && asset.published_at
+                          ? `published ${formatDateTime(asset.published_at)}`
+                          : formatDateTime(asset.created_at)}
                       </p>
                     </div>
-                    <div className="flex shrink-0 items-center gap-1.5">
+                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                       <RiskBadge risk={asset.risk_level} />
-                      <span className="inline-flex items-center rounded-full bg-signal-warning/15 px-2 py-0.5 text-[10px] font-medium text-signal-warning">
-                        Pending
-                      </span>
+                      <StatusBadge status={asset.status} />
+                      {asset.destination ? <DestinationBadge destination={asset.destination} /> : null}
                     </div>
                   </div>
                   {captionPreview ? (
@@ -187,24 +326,28 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
                         Open
                       </button>
                     ) : null}
-                    <button
-                      type="button"
-                      onClick={() => transition(asset.id, "rejected")}
-                      disabled={isPending}
-                      className="inline-flex items-center gap-1 rounded-lg border border-line-soft px-3 py-1.5 text-xs text-ink-300 hover:border-signal-danger/50 hover:text-signal-danger disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <XCircle className="h-3.5 w-3.5" />
-                      Reject
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => transition(asset.id, "approved")}
-                      disabled={isPending}
-                      className="inline-flex items-center gap-1 rounded-lg bg-accent-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" />
-                      Approve
-                    </button>
+                    {showReviewButtons ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => transition(asset.id, "rejected")}
+                          disabled={isPending}
+                          className="inline-flex items-center gap-1 rounded-lg border border-line-soft px-3 py-1.5 text-xs text-ink-300 hover:border-signal-danger/50 hover:text-signal-danger disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <XCircle className="h-3.5 w-3.5" />
+                          Reject
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => transition(asset.id, "approved")}
+                          disabled={isPending}
+                          className="inline-flex items-center gap-1 rounded-lg bg-accent-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <CheckCircle2 className="h-3.5 w-3.5" />
+                          Approve
+                        </button>
+                      </>
+                    ) : null}
                   </div>
                 </div>
               </div>
