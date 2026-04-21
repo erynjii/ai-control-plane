@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { getCurrentUser, signOut } from "@/lib/supabase/auth";
 import { AIWorkspace } from "@/components/dashboard/ai-workspace";
+import { ApprovalQueue } from "@/components/dashboard/approval-queue";
+import { AssetHistory } from "@/components/dashboard/asset-history";
 import { Header } from "@/components/dashboard/header";
 import { PanelCard } from "@/components/dashboard/panel-card";
+import { ScannerSummary } from "@/components/dashboard/scanner-summary";
 import { Sidebar } from "@/components/dashboard/sidebar";
 
 type DashboardState = {
@@ -23,6 +26,7 @@ export default function DashboardPage() {
     email: null,
     error: null
   });
+  const [assetRefreshKey, setAssetRefreshKey] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -72,28 +76,31 @@ export default function DashboardPage() {
         <Sidebar items={SIDEBAR_ITEMS} />
 
         <div className="flex flex-col gap-4">
-          <AIWorkspace />
+          <AIWorkspace onAssetChanged={() => setAssetRefreshKey((key) => key + 1)} />
 
           <div className="grid gap-4 md:grid-cols-2">
             <PanelCard
               title="Prompt Compliance Scanner"
               subtitle="Risk checks for generated content."
             >
-              <p className="text-sm text-slate-400">Scan engine not yet wired. Placeholder panel.</p>
+              <ScannerSummary refreshKey={assetRefreshKey} />
             </PanelCard>
 
             <PanelCard
               title="Content Approval Queue"
               subtitle="Pending review before publish."
             >
-              <p className="text-sm text-slate-400">Approval workflow coming soon.</p>
+              <ApprovalQueue
+                refreshKey={assetRefreshKey}
+                onAction={() => setAssetRefreshKey((key) => key + 1)}
+              />
             </PanelCard>
 
             <PanelCard
               title="Creation Audit Trail"
               subtitle="Every generation, tracked."
             >
-              <p className="text-sm text-slate-400">Asset history will appear here once listing is wired.</p>
+              <AssetHistory refreshKey={assetRefreshKey} />
             </PanelCard>
 
             <PanelCard

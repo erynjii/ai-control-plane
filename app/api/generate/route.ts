@@ -1,30 +1,26 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { MODEL_MODES, resolveModelForMode } from "@/lib/ai/model-mapping";
+import { scanContent } from "@/lib/scan";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const requestSchema = z.object({
   prompt: z.string().trim().min(1, "Prompt cannot be empty."),
   modelMode: z.enum(MODEL_MODES),
-  workspaceId: z.string().trim().min(1).default("default-workspace"),
-  accessToken: z.string().min(1, "Missing session token.")
+  workspaceId: z.string().trim().min(1).default("default-workspace")
 });
 
-type OpenAIResponsePayload = {
-  output_text?: string;
-  output?: Array<{
-    content?: Array<{ text?: string }>;
+type OpenAIChatCompletionPayload = {
+  choices?: Array<{
+    message?: {
+      content?: string;
+    };
   }>;
 };
 
-function getOutputText(payload: OpenAIResponsePayload): string {
-  if (payload.output_text && payload.output_text.trim()) {
-    return payload.output_text.trim();
-  }
-
-  const nestedText = payload.output?.flatMap((entry) => entry.content ?? []).map((entry) => entry.text ?? "").join("\n").trim();
-
-  return nestedText || "No output returned.";
+function getOutputText(payload: OpenAIChatCompletionPayload): string {
+  const content = payload.choices?.[0]?.message?.content?.trim();
+  return content || "No output returned.";
 }
 
 export async function POST(request: Request) {
@@ -34,23 +30,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: parsedBody.error.issues[0]?.message || "Invalid request." }, { status: 400 });
   }
 
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
   const openAiApiKey = process.env.OPENAI_API_KEY;
 
-  if (!supabaseUrl || !supabaseAnonKey || !openAiApiKey) {
+  if (!openAiApiKey) {
     return NextResponse.json({ error: "Server configuration is incomplete." }, { status: 500 });
   }
 
-  const { prompt, modelMode, workspaceId, accessToken } = parsedBody.data;
+  const { prompt, modelMode, workspaceId } = parsedBody.data;
 
-  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-    global: {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      }
-    }
-  });
+  const supabase = createSupabaseServerClient();
 
   const {
     data: { user },
@@ -63,7 +51,7 @@ export async function POST(request: Request) {
 
   const selectedModel = resolveModelForMode(modelMode);
 
-  const completionResponse = await fetch("https://api.openai.com/v1/responses", {
+  const completionResponse = await fetch("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -71,16 +59,32 @@ export async function POST(request: Request) {
     },
     body: JSON.stringify({
       model: selectedModel,
-      input: `You are a marketing content assistant.\n\nUser prompt:\n${prompt}`
+      messages: [
+        { role: "system", content: "You are a marketing content assistant." },
+        { role: "user", content: prompt }
+      ]
     })
   });
 
   if (!completionResponse.ok) {
-    return NextResponse.json({ error: "Failed to generate content." }, { status: 502 });
+    const errorBody = await completionResponse.text();
+    let detail = errorBody;
+    try {
+      const parsed = JSON.parse(errorBody) as { error?: { message?: string } };
+      detail = parsed.error?.message || errorBody;
+    } catch {
+      // Response was not JSON; keep raw body.
+    }
+    console.error("OpenAI request failed", { status: completionResponse.status, detail });
+    return NextResponse.json(
+      { error: `OpenAI ${completionResponse.status}: ${detail || "Unknown error"}` },
+      { status: 502 }
+    );
   }
 
-  const completionPayload = (await completionResponse.json()) as OpenAIResponsePayload;
+  const completionPayload = (await completionResponse.json()) as OpenAIChatCompletionPayload;
   const outputText = getOutputText(completionPayload);
+  const scan = scanContent({ prompt, output: outputText });
   const now = new Date().toISOString();
 
   const { data: asset, error: insertError } = await supabase
@@ -92,16 +96,17 @@ export async function POST(request: Request) {
       output: outputText,
       model: selectedModel,
       status: "draft",
-      risk_level: "unknown",
+      risk_level: scan.riskLevel,
+      scan_findings: scan.findings,
       created_at: now,
       updated_at: now
     })
-    .select("id, workspace_id, user_id, prompt, output, model, status, risk_level, created_at, updated_at")
+    .select("id, workspace_id, user_id, prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
     .single();
 
   if (insertError) {
     return NextResponse.json({ error: "Failed to save generated asset." }, { status: 500 });
   }
 
-  return NextResponse.json({ output: outputText, asset });
+  return NextResponse.json({ output: outputText, asset, scan });
 }
