@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { ASSET_STATUSES, type AssetStatus } from "@/lib/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { DESTINATIONS, DESTINATION_STATUSES, type Destination, type DestinationStatus } from "@/lib/integrations/types";
 
 function parseStatus(value: string | null): AssetStatus | null {
   if (!value) return null;
@@ -12,6 +13,16 @@ function parsePromoted(value: string | null): boolean | null {
   if (value === "true" || value === "1") return true;
   if (value === "false" || value === "0") return false;
   return null;
+}
+
+function parseDestination(value: string | null): Destination | null {
+  if (!value) return null;
+  return (DESTINATIONS as readonly string[]).includes(value) ? (value as Destination) : null;
+}
+
+function parseDestinationStatus(value: string | null): DestinationStatus | null {
+  if (!value) return null;
+  return (DESTINATION_STATUSES as readonly string[]).includes(value) ? (value as DestinationStatus) : null;
 }
 
 export async function GET(request: Request) {
@@ -29,12 +40,16 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const statusFilter = parseStatus(url.searchParams.get("status"));
   const promotedFilter = parsePromoted(url.searchParams.get("promoted"));
+  const destinationFilter = parseDestination(url.searchParams.get("destination"));
+  const destinationStatusFilter = parseDestinationStatus(url.searchParams.get("destinationStatus"));
   const limitRaw = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
   const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 25;
 
   let query = supabase
     .from("assets")
-    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, created_at, updated_at")
+    .select(
+      "id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, destination, destination_status, destination_meta, published_at, failure_reason, created_at, updated_at"
+    )
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -44,6 +59,14 @@ export async function GET(request: Request) {
 
   if (promotedFilter !== null) {
     query = query.eq("promoted", promotedFilter);
+  }
+
+  if (destinationFilter) {
+    query = query.eq("destination", destinationFilter);
+  }
+
+  if (destinationStatusFilter) {
+    query = query.eq("destination_status", destinationStatusFilter);
   }
 
   const { data, error } = await query;
