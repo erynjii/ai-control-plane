@@ -11,6 +11,7 @@ type ApprovalQueueProps = {
   onAction?: () => void;
   onSelectAsset?: (asset: Asset) => void;
   onCountChange?: (count: number) => void;
+  onViewAll?: () => void;
 };
 
 function formatClock(iso: string): string {
@@ -44,7 +45,13 @@ function Thumbnail({ asset }: { asset: Asset }) {
   );
 }
 
-export function ApprovalQueue({ refreshKey = 0, onAction, onSelectAsset, onCountChange }: ApprovalQueueProps) {
+export function ApprovalQueue({
+  refreshKey = 0,
+  onAction,
+  onSelectAsset,
+  onCountChange,
+  onViewAll
+}: ApprovalQueueProps) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [pendingId, setPendingId] = useState<string | null>(null);
@@ -95,9 +102,15 @@ export function ApprovalQueue({ refreshKey = 0, onAction, onSelectAsset, onCount
     <section className="rounded-xl border border-line-soft bg-canvas-card p-4">
       <header className="mb-3 flex items-center justify-between">
         <h3 className="text-sm font-semibold text-ink-100">Approvals Queue</h3>
-        <button type="button" className="text-xs text-accent-cyan hover:underline">
-          View all
-        </button>
+        {onViewAll ? (
+          <button
+            type="button"
+            onClick={onViewAll}
+            className="text-xs text-accent-cyan hover:underline"
+          >
+            View all
+          </button>
+        ) : null}
       </header>
 
       {status === "loading" ? <p className="text-xs text-ink-500">Loading…</p> : null}
