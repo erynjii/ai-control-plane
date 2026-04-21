@@ -6,12 +6,22 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 const DEFAULT_SYSTEM_PROMPT = "You are a marketing content assistant.";
 
-const requestSchema = z.object({
-  prompt: z.string().trim().min(1, "Prompt cannot be empty."),
-  systemPrompt: z.string().trim().min(1).default(DEFAULT_SYSTEM_PROMPT),
-  modelMode: z.enum(MODEL_MODES),
-  workspaceId: z.string().trim().min(1).default("default-workspace")
+const chatMessageSchema = z.object({
+  role: z.enum(["user", "assistant"]),
+  content: z.string().min(1)
 });
+
+const requestSchema = z
+  .object({
+    messages: z.array(chatMessageSchema).min(1, "messages cannot be empty"),
+    systemPrompt: z.string().trim().min(1).default(DEFAULT_SYSTEM_PROMPT),
+    modelMode: z.enum(MODEL_MODES),
+    workspaceId: z.string().trim().min(1).default("default-workspace")
+  })
+  .refine((data) => data.messages[data.messages.length - 1].role === "user", {
+    message: "The last message must be from the user.",
+    path: ["messages"]
+  });
 
 type OpenAIChatCompletionPayload = {
   choices?: Array<{
@@ -39,7 +49,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Server configuration is incomplete." }, { status: 500 });
   }
 
-  const { prompt, systemPrompt, modelMode, workspaceId } = parsedBody.data;
+  const { messages, systemPrompt, modelMode, workspaceId } = parsedBody.data;
+  const lastUserMessage = messages[messages.length - 1].content;
 
   const supabase = createSupabaseServerClient();
 
@@ -62,10 +73,7 @@ export async function POST(request: Request) {
     },
     body: JSON.stringify({
       model: selectedModel,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: prompt }
-      ]
+      messages: [{ role: "system", content: systemPrompt }, ...messages]
     })
   });
 
@@ -87,7 +95,7 @@ export async function POST(request: Request) {
 
   const completionPayload = (await completionResponse.json()) as OpenAIChatCompletionPayload;
   const outputText = getOutputText(completionPayload);
-  const scan = scanContent({ prompt, output: outputText });
+  const scan = scanContent({ prompt: lastUserMessage, output: outputText });
   const now = new Date().toISOString();
 
   const { data: asset, error: insertError } = await supabase
@@ -95,17 +103,18 @@ export async function POST(request: Request) {
     .insert({
       workspace_id: workspaceId,
       user_id: user.id,
-      prompt,
+      prompt: lastUserMessage,
       system_prompt: systemPrompt,
       output: outputText,
       model: selectedModel,
       status: "draft",
       risk_level: scan.riskLevel,
       scan_findings: scan.findings,
+      promoted: false,
       created_at: now,
       updated_at: now
     })
-    .select("id, workspace_id, user_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
+    .select("id, workspace_id, user_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, created_at, updated_at")
     .single();
 
   if (insertError) {

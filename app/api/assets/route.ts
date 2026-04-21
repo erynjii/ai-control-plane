@@ -7,6 +7,13 @@ function parseStatus(value: string | null): AssetStatus | null {
   return (ASSET_STATUSES as readonly string[]).includes(value) ? (value as AssetStatus) : null;
 }
 
+function parsePromoted(value: string | null): boolean | null {
+  if (value === null) return null;
+  if (value === "true" || value === "1") return true;
+  if (value === "false" || value === "0") return false;
+  return null;
+}
+
 export async function GET(request: Request) {
   const supabase = createSupabaseServerClient();
 
@@ -21,15 +28,20 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const statusFilter = parseStatus(url.searchParams.get("status"));
+  const promotedFilter = parsePromoted(url.searchParams.get("promoted"));
 
   let query = supabase
     .from("assets")
-    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
+    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, created_at, updated_at")
     .order("created_at", { ascending: false })
     .limit(25);
 
   if (statusFilter) {
     query = query.eq("status", statusFilter);
+  }
+
+  if (promotedFilter !== null) {
+    query = query.eq("promoted", promotedFilter);
   }
 
   const { data, error } = await query;

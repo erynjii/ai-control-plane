@@ -23,7 +23,7 @@ export function ApprovalQueue({ refreshKey = 0, onAction }: ApprovalQueueProps) 
     setErrorMessage(null);
 
     try {
-      const response = await fetch("/api/assets?status=pending_review", { method: "GET" });
+      const response = await fetch("/api/assets?status=pending_review&promoted=true", { method: "GET" });
       const payload = (await response.json().catch(() => null)) as
         | { assets?: Asset[]; error?: string }
         | null;

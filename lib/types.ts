@@ -14,6 +14,7 @@ export type Asset = {
   status: string;
   risk_level: string;
   scan_findings: ScanFinding[];
+  promoted: boolean;
   created_at: string;
   updated_at: string;
 };
