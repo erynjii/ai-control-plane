@@ -5,7 +5,9 @@ import ReactMarkdown from "react-markdown";
 import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
 import type { ScanResult, Severity } from "@/lib/scan";
 import type { Asset } from "@/lib/types";
+import { DESTINATIONS, type Destination, type DestinationStatus } from "@/lib/integrations/types";
 import { RiskBadge } from "@/components/dashboard/risk-badge";
+import { DestinationBadge, PublishStatusBadge } from "@/components/dashboard/destination-badge";
 
 const DEFAULT_SYSTEM_PROMPT = "You are a marketing content assistant.";
 
@@ -52,6 +54,9 @@ type AssistantTurn = {
   scan: ScanResult;
   promoted: boolean;
   status: string;
+  destination: Destination | null;
+  destinationStatus: DestinationStatus;
+  failureReason: string | null;
 };
 type ChatTurn = UserTurn | AssistantTurn;
 
@@ -94,7 +99,10 @@ function buildTurnsFromAssets(assets: Asset[]): ChatTurn[] {
         findings: asset.scan_findings ?? []
       },
       promoted: asset.promoted,
-      status: asset.status
+      status: asset.status,
+      destination: asset.destination,
+      destinationStatus: asset.destination_status,
+      failureReason: asset.failure_reason
     });
   }
   return turns;
@@ -203,7 +211,10 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
         assetId: payload.asset.id,
         scan: payload.scan,
         promoted: payload.asset.promoted,
-        status: payload.asset.status
+        status: payload.asset.status,
+        destination: payload.asset.destination,
+        destinationStatus: payload.asset.destination_status,
+        failureReason: payload.asset.failure_reason
       };
       setMessages((current) => [...current, assistantTurn]);
 
@@ -243,6 +254,23 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
     }
   };
 
+  const applyAssetToTurn = (turnId: string, updated: Asset) => {
+    setMessages((current) =>
+      current.map((turn) =>
+        turn.id === turnId && turn.role === "assistant"
+          ? {
+              ...turn,
+              promoted: updated.promoted,
+              status: updated.status,
+              destination: updated.destination,
+              destinationStatus: updated.destination_status,
+              failureReason: updated.failure_reason
+            }
+          : turn
+      )
+    );
+  };
+
   const patchAsset = async (
     turnId: string,
     assetId: string,
@@ -263,14 +291,7 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
         setActionError(payload?.error ?? "Action failed.");
         return;
       }
-      const updated = payload.asset;
-      setMessages((current) =>
-        current.map((turn) =>
-          turn.id === turnId && turn.role === "assistant"
-            ? { ...turn, promoted: updated.promoted, status: updated.status }
-            : turn
-        )
-      );
+      applyAssetToTurn(turnId, payload.asset);
       onAssetChanged?.();
     } catch {
       setActionError("Network error. Please try again.");
@@ -282,6 +303,92 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
   const handleSaveAsAsset = (turnId: string, assetId: string) => patchAsset(turnId, assetId, { promoted: true });
   const handleSendToApproval = (turnId: string, assetId: string) =>
     patchAsset(turnId, assetId, { promoted: true, status: "pending_review" });
+
+  const handleAssignDestination = async (
+    turnId: string,
+    assetId: string,
+    destination: Destination
+  ) => {
+    setPendingActionId(turnId);
+    setActionError(null);
+    try {
+      const response = await fetch(`/api/assets/${assetId}/destination`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ destination })
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { asset?: Asset; error?: string }
+        | null;
+      if (!response.ok || !payload?.asset) {
+        setActionError(payload?.error ?? "Failed to assign destination.");
+        return;
+      }
+      applyAssetToTurn(turnId, payload.asset);
+      onAssetChanged?.();
+    } catch {
+      setActionError("Network error. Please try again.");
+    } finally {
+      setPendingActionId(null);
+    }
+  };
+
+  const handlePublish = async (turnId: string, assetId: string) => {
+    setPendingActionId(turnId);
+    setActionError(null);
+    // Optimistically show "queued" while the mock flow runs.
+    setMessages((current) =>
+      current.map((turn) =>
+        turn.id === turnId && turn.role === "assistant"
+          ? { ...turn, destinationStatus: "queued", status: "queued", failureReason: null }
+          : turn
+      )
+    );
+    try {
+      const response = await fetch(`/api/assets/${assetId}/publish`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | { asset?: Asset; error?: string }
+        | null;
+      if (!response.ok || !payload?.asset) {
+        setActionError(payload?.error ?? "Publish failed.");
+        return;
+      }
+      applyAssetToTurn(turnId, payload.asset);
+      onAssetChanged?.();
+    } catch {
+      setActionError("Network error. Please try again.");
+    } finally {
+      setPendingActionId(null);
+    }
+  };
+
+  const handleRetry = async (turnId: string, assetId: string) => {
+    setPendingActionId(turnId);
+    setActionError(null);
+    setMessages((current) =>
+      current.map((turn) =>
+        turn.id === turnId && turn.role === "assistant"
+          ? { ...turn, destinationStatus: "queued", status: "queued", failureReason: null }
+          : turn
+      )
+    );
+    try {
+      const response = await fetch(`/api/assets/${assetId}/retry`, { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as
+        | { asset?: Asset; error?: string }
+        | null;
+      if (!response.ok || !payload?.asset) {
+        setActionError(payload?.error ?? "Retry failed.");
+        return;
+      }
+      applyAssetToTurn(turnId, payload.asset);
+      onAssetChanged?.();
+    } catch {
+      setActionError("Network error. Please try again.");
+    } finally {
+      setPendingActionId(null);
+    }
+  };
 
   const isSystemPromptCustom = systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT;
 
@@ -355,6 +462,9 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
             onCopy={() => handleCopy(turn.id, turn.content)}
             onSaveAsAsset={() => handleSaveAsAsset(turn.id, turn.assetId)}
             onSendToApproval={() => handleSendToApproval(turn.id, turn.assetId)}
+            onAssignDestination={(destination) => handleAssignDestination(turn.id, turn.assetId, destination)}
+            onPublish={() => handlePublish(turn.id, turn.assetId)}
+            onRetry={() => handleRetry(turn.id, turn.assetId)}
           />
         )))}
 
@@ -453,16 +563,48 @@ type AssistantBubbleProps = {
   onCopy: () => void;
   onSaveAsAsset: () => void;
   onSendToApproval: () => void;
+  onAssignDestination: (destination: Destination) => void;
+  onPublish: () => void;
+  onRetry: () => void;
 };
 
-function AssistantBubble({ turn, copied, pending, onCopy, onSaveAsAsset, onSendToApproval }: AssistantBubbleProps) {
+function AssistantBubble({
+  turn,
+  copied,
+  pending,
+  onCopy,
+  onSaveAsAsset,
+  onSendToApproval,
+  onAssignDestination,
+  onPublish,
+  onRetry
+}: AssistantBubbleProps) {
+  const [destinationMenuOpen, setDestinationMenuOpen] = useState(false);
+
   const inReview = turn.status === "pending_review";
   const decided = turn.status === "approved" || turn.status === "rejected";
+  const isApproved = turn.status === "approved" || turn.destinationStatus !== "idle";
+  const hasDestination = turn.destination !== null;
+  const canPublish =
+    turn.status === "approved" &&
+    hasDestination &&
+    (turn.destinationStatus === "assigned" || turn.destinationStatus === "queued");
+  const canRetry = turn.destinationStatus === "failed";
+  const inFlight =
+    turn.destinationStatus === "queued" || turn.destinationStatus === "publishing";
 
   let statusLabel: string | null = null;
   if (turn.status === "pending_review") statusLabel = "In review";
   else if (turn.status === "approved") statusLabel = "Approved";
   else if (turn.status === "rejected") statusLabel = "Rejected";
+  else if (turn.status === "queued") statusLabel = "Queued";
+  else if (turn.status === "published") statusLabel = "Published";
+  else if (turn.status === "failed") statusLabel = "Failed";
+
+  const handleDestinationPick = (destination: Destination) => {
+    setDestinationMenuOpen(false);
+    onAssignDestination(destination);
+  };
 
   return (
     <div className="flex items-start gap-2">
@@ -474,6 +616,13 @@ function AssistantBubble({ turn, copied, pending, onCopy, onSaveAsAsset, onSendT
         <div className="flex flex-wrap items-center gap-2 text-xs">
           <span className="text-[10px] text-slate-500">{formatTime(turn.timestamp)}</span>
           <RiskBadge risk={turn.scan.riskLevel} />
+          {turn.promoted ? (
+            <span className="rounded-md border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
+              {turn.status}
+            </span>
+          ) : null}
+          {turn.destination ? <DestinationBadge destination={turn.destination} /> : null}
+          <PublishStatusBadge status={turn.destinationStatus} />
           <button type="button" onClick={onCopy} className="text-slate-400 hover:text-slate-200">
             {copied ? "Copied" : "Copy"}
           </button>
@@ -492,7 +641,21 @@ function AssistantBubble({ turn, copied, pending, onCopy, onSaveAsAsset, onSendT
           )}
           <span className="text-slate-700">·</span>
           {statusLabel ? (
-            <span className={decided ? "text-slate-300" : "text-amber-300"}>{statusLabel}</span>
+            <span
+              className={
+                turn.status === "published"
+                  ? "text-emerald-300"
+                  : turn.status === "failed"
+                  ? "text-rose-300"
+                  : turn.status === "queued"
+                  ? "text-amber-300"
+                  : decided
+                  ? "text-slate-300"
+                  : "text-amber-300"
+              }
+            >
+              {statusLabel}
+            </span>
           ) : (
             <button
               type="button"
@@ -503,7 +666,77 @@ function AssistantBubble({ turn, copied, pending, onCopy, onSaveAsAsset, onSendT
               {pending ? "Sending..." : "Send to Approval"}
             </button>
           )}
+          {isApproved ? (
+            <>
+              <span className="text-slate-700">·</span>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setDestinationMenuOpen((open) => !open)}
+                  disabled={pending || inFlight || turn.destinationStatus === "published"}
+                  aria-haspopup="menu"
+                  aria-expanded={destinationMenuOpen}
+                  className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {hasDestination ? "Change Destination" : "Assign Destination"}
+                </button>
+                {destinationMenuOpen ? (
+                  <div
+                    role="menu"
+                    className="absolute left-0 z-10 mt-1 w-40 overflow-hidden rounded-md border border-slate-700 bg-slate-950 shadow-lg"
+                  >
+                    {DESTINATIONS.map((destination) => (
+                      <button
+                        key={destination}
+                        type="button"
+                        role="menuitem"
+                        onClick={() => handleDestinationPick(destination)}
+                        className="block w-full px-3 py-1.5 text-left text-xs capitalize text-slate-200 hover:bg-slate-800"
+                      >
+                        {destination}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </>
+          ) : null}
+          {canPublish ? (
+            <>
+              <span className="text-slate-700">·</span>
+              <button
+                type="button"
+                onClick={onPublish}
+                disabled={pending}
+                className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pending || inFlight ? "Publishing..." : "Publish"}
+              </button>
+            </>
+          ) : null}
+          {canRetry ? (
+            <>
+              <span className="text-slate-700">·</span>
+              <button
+                type="button"
+                onClick={onRetry}
+                disabled={pending}
+                className="text-amber-300 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pending ? "Retrying..." : "Retry"}
+              </button>
+            </>
+          ) : null}
+          {turn.destinationStatus === "published" ? (
+            <>
+              <span className="text-slate-700">·</span>
+              <span className="text-emerald-300">Published</span>
+            </>
+          ) : null}
         </div>
+        {turn.failureReason ? (
+          <p className="text-[10px] text-rose-300">Failure: {turn.failureReason}</p>
+        ) : null}
       </div>
     </div>
   );

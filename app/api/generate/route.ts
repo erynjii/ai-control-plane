@@ -141,7 +141,9 @@ export async function POST(request: Request) {
       created_at: now,
       updated_at: now
     })
-    .select("id, workspace_id, user_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, created_at, updated_at")
+    .select(
+      "id, workspace_id, user_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, destination, destination_status, destination_meta, published_at, failure_reason, created_at, updated_at"
+    )
     .single();
 
   if (insertError) {

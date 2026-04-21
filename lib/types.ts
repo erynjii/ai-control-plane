@@ -1,6 +1,15 @@
 import type { ScanFinding } from "@/lib/scan";
+import type { Destination, DestinationStatus } from "@/lib/integrations/types";
 
-export const ASSET_STATUSES = ["draft", "pending_review", "approved", "rejected"] as const;
+export const ASSET_STATUSES = [
+  "draft",
+  "pending_review",
+  "approved",
+  "rejected",
+  "queued",
+  "published",
+  "failed"
+] as const;
 
 export type AssetStatus = (typeof ASSET_STATUSES)[number];
 
@@ -16,8 +25,21 @@ export type Asset = {
   scan_findings: ScanFinding[];
   promoted: boolean;
   conversation_id: string | null;
+  destination: Destination | null;
+  destination_status: DestinationStatus;
+  destination_meta: Record<string, unknown>;
+  published_at: string | null;
+  failure_reason: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type AuditEvent = {
+  id: string;
+  asset_id: string;
+  action: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
 };
 
 export type Conversation = {

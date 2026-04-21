@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { getCurrentUser, signOut } from "@/lib/supabase/auth";
 import { AIWorkspace } from "@/components/dashboard/ai-workspace";
 import { ApprovalQueue } from "@/components/dashboard/approval-queue";
+import { AuditTrailCard } from "@/components/dashboard/audit-trail-card";
 import { Header } from "@/components/dashboard/header";
 import { InsightsCard } from "@/components/dashboard/insights-card";
 import { LeftRail, type NavItem } from "@/components/dashboard/left-rail";
@@ -20,7 +21,8 @@ type DashboardState = {
 const NAV_ITEMS: NavItem[] = [
   { label: "Workspace", targetId: "panel-workspace" },
   { label: "Approvals", targetId: "panel-approvals" },
-  { label: "Audit Trail", targetId: "panel-assets" },
+  { label: "Assets", targetId: "panel-assets" },
+  { label: "Audit Trail", targetId: "panel-audit" },
   { label: "Insights", targetId: "panel-insights" },
   { label: "Settings" }
 ];
@@ -138,6 +140,10 @@ export default function DashboardPage() {
 
           <PanelCard id="panel-approvals" title="Approvals Queue" subtitle="Ready for review">
             <ApprovalQueue refreshKey={assetRefreshKey} onAction={bumpAssets} />
+          </PanelCard>
+
+          <PanelCard id="panel-audit" title="Creation Audit Trail" subtitle="Publishing events">
+            <AuditTrailCard refreshKey={assetRefreshKey} />
           </PanelCard>
 
           <PanelCard id="panel-insights" title="Insights" subtitle="Pipeline at a glance">

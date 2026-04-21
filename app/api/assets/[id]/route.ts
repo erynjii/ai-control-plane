@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { ASSET_STATUSES } from "@/lib/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+
+const REVIEW_STATUSES = ["draft", "pending_review", "approved", "rejected"] as const;
 
 const patchSchema = z
   .object({
-    status: z.enum(ASSET_STATUSES).optional(),
+    status: z.enum(REVIEW_STATUSES).optional(),
     promoted: z.boolean().optional()
   })
   .refine((data) => data.status !== undefined || data.promoted !== undefined, {
@@ -43,7 +44,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     .from("assets")
     .update(updatePayload)
     .eq("id", params.id)
-    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, created_at, updated_at")
+    .select(
+      "id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, destination, destination_status, destination_meta, published_at, failure_reason, created_at, updated_at"
+    )
     .single();
 
   if (error || !data) {
