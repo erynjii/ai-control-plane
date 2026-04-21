@@ -41,7 +41,7 @@ export function ScannerSummary({ refreshKey = 0 }: ScannerSummaryProps) {
     setErrorMessage(null);
 
     try {
-      const response = await fetch("/api/assets", { method: "GET" });
+      const response = await fetch("/api/assets?promoted=true", { method: "GET" });
       const payload = (await response.json().catch(() => null)) as
         | { assets?: Asset[]; error?: string }
         | null;
@@ -79,7 +79,7 @@ export function ScannerSummary({ refreshKey = 0 }: ScannerSummaryProps) {
   }
 
   if (total === 0) {
-    return <p className="text-sm text-slate-400">No assets scanned yet.</p>;
+    return <p className="text-sm text-slate-400">No promoted assets yet. Save a chat response as an asset to see risk here.</p>;
   }
 
   const tiles: Array<{ label: string; value: number; classes: string }> = [
@@ -90,7 +90,7 @@ export function ScannerSummary({ refreshKey = 0 }: ScannerSummaryProps) {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-slate-400">Risk distribution across your last {total} assets.</p>
+      <p className="text-xs text-slate-400">Risk distribution across your last {total} promoted {total === 1 ? "asset" : "assets"}.</p>
       <div className="grid grid-cols-3 gap-2">
         {tiles.map((tile) => (
           <div

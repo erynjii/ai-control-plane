@@ -3,9 +3,14 @@ import { z } from "zod";
 import { ASSET_STATUSES } from "@/lib/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
-const patchSchema = z.object({
-  status: z.enum(ASSET_STATUSES)
-});
+const patchSchema = z
+  .object({
+    status: z.enum(ASSET_STATUSES).optional(),
+    promoted: z.boolean().optional()
+  })
+  .refine((data) => data.status !== undefined || data.promoted !== undefined, {
+    message: "Must provide status or promoted."
+  });
 
 export async function PATCH(request: Request, { params }: { params: { id: string } }) {
   const parsedBody = patchSchema.safeParse(await request.json().catch(() => ({})));
@@ -28,14 +33,17 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
   }
 
+  const updatePayload: { status?: string; promoted?: boolean; updated_at: string } = {
+    updated_at: new Date().toISOString()
+  };
+  if (parsedBody.data.status !== undefined) updatePayload.status = parsedBody.data.status;
+  if (parsedBody.data.promoted !== undefined) updatePayload.promoted = parsedBody.data.promoted;
+
   const { data, error } = await supabase
     .from("assets")
-    .update({
-      status: parsedBody.data.status,
-      updated_at: new Date().toISOString()
-    })
+    .update(updatePayload)
     .eq("id", params.id)
-    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
+    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, created_at, updated_at")
     .single();
 
   if (error || !data) {

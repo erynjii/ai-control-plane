@@ -1,14 +1,11 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
 import type { ScanResult } from "@/lib/scan";
 import type { Asset } from "@/lib/types";
 import { RiskBadge } from "@/components/dashboard/risk-badge";
-
-type Status = "idle" | "loading" | "success" | "error";
-type SubmitStatus = "idle" | "loading" | "submitted" | "error";
 
 const DEFAULT_SYSTEM_PROMPT = "You are a marketing content assistant.";
 
@@ -45,297 +42,312 @@ const MARKDOWN_COMPONENTS = {
   )
 };
 
+type UserTurn = { id: string; role: "user"; content: string };
+type AssistantTurn = {
+  id: string;
+  role: "assistant";
+  content: string;
+  assetId: string;
+  scan: ScanResult;
+  promoted: boolean;
+};
+type ChatTurn = UserTurn | AssistantTurn;
+
 type AIWorkspaceProps = {
   onAssetChanged?: () => void;
 };
 
+function newId(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
-  const [prompt, setPrompt] = useState("");
+  const [messages, setMessages] = useState<ChatTurn[]>([]);
+  const [input, setInput] = useState("");
+  const [isPending, setIsPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
   const [systemPromptOpen, setSystemPromptOpen] = useState(false);
   const [modelMode, setModelMode] = useState<ModelMode>("Auto");
-  const [status, setStatus] = useState<Status>("idle");
-  const [output, setOutput] = useState<string | null>(null);
-  const [scan, setScan] = useState<ScanResult | null>(null);
-  const [asset, setAsset] = useState<Asset | null>(null);
-  const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [promotingId, setPromotingId] = useState<string | null>(null);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
 
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const threadRef = useRef<HTMLDivElement>(null);
 
-    const trimmedPrompt = prompt.trim();
-    if (!trimmedPrompt) {
-      setStatus("error");
-      setErrorMessage("Prompt cannot be empty.");
-      return;
-    }
+  useEffect(() => {
+    const el = threadRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [messages, isPending]);
 
-    const trimmedSystemPrompt = systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT;
+  const sendMessage = async () => {
+    const trimmed = input.trim();
+    if (!trimmed || isPending) return;
 
-    setStatus("loading");
-    setOutput(null);
-    setScan(null);
-    setAsset(null);
-    setSubmitStatus("idle");
-    setSubmitError(null);
-    setErrorMessage(null);
-    setCopied(false);
+    const userTurn: UserTurn = { id: newId(), role: "user", content: trimmed };
+    const nextMessages: ChatTurn[] = [...messages, userTurn];
+
+    setMessages(nextMessages);
+    setInput("");
+    setIsPending(true);
+    setError(null);
+    setPromoteError(null);
+
+    const apiMessages = nextMessages.map(({ role, content }) => ({ role, content }));
 
     try {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: trimmedPrompt,
-          systemPrompt: trimmedSystemPrompt,
+          messages: apiMessages,
+          systemPrompt: systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
           modelMode
         })
       });
 
       const payload = (await response.json().catch(() => null)) as
-        | { output?: string; scan?: ScanResult; asset?: Asset; error?: string }
+        | { output?: string; asset?: Asset; scan?: ScanResult; error?: string }
         | null;
 
-      if (!response.ok) {
-        setStatus("error");
-        setErrorMessage(payload?.error ?? "Failed to generate content.");
+      if (!response.ok || !payload?.output || !payload.asset || !payload.scan) {
+        setError(payload?.error ?? "Failed to get a response.");
         return;
       }
 
-      setOutput(payload?.output ?? "");
-      setScan(payload?.scan ?? null);
-      setAsset(payload?.asset ?? null);
-      setStatus("success");
+      const assistantTurn: AssistantTurn = {
+        id: newId(),
+        role: "assistant",
+        content: payload.output,
+        assetId: payload.asset.id,
+        scan: payload.scan,
+        promoted: payload.asset.promoted
+      };
+      setMessages((current) => [...current, assistantTurn]);
       onAssetChanged?.();
     } catch {
-      setStatus("error");
-      setErrorMessage("Network error. Please try again.");
+      setError("Network error. Please try again.");
+    } finally {
+      setIsPending(false);
     }
   };
 
-  const handleSubmitForReview = async () => {
-    if (!asset) return;
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    sendMessage();
+  };
 
-    setSubmitStatus("loading");
-    setSubmitError(null);
-
-    try {
-      const response = await fetch(`/api/assets/${asset.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "pending_review" })
-      });
-
-      const payload = (await response.json().catch(() => null)) as
-        | { asset?: Asset; error?: string }
-        | null;
-
-      if (!response.ok || !payload?.asset) {
-        setSubmitStatus("error");
-        setSubmitError(payload?.error ?? "Failed to submit for review.");
-        return;
-      }
-
-      setAsset(payload.asset);
-      setSubmitStatus("submitted");
-      onAssetChanged?.();
-    } catch {
-      setSubmitStatus("error");
-      setSubmitError("Network error. Please try again.");
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      sendMessage();
     }
   };
 
-  const handleCopy = async () => {
-    if (!output) return;
+  const handleCopy = async (turnId: string, content: string) => {
     try {
-      await navigator.clipboard.writeText(output);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      await navigator.clipboard.writeText(content);
+      setCopiedId(turnId);
+      window.setTimeout(() => {
+        setCopiedId((current) => (current === turnId ? null : current));
+      }, 2000);
     } catch {
       // Clipboard access denied; ignore.
     }
   };
 
-  const isLoading = status === "loading";
+  const handlePromote = async (turnId: string, assetId: string) => {
+    setPromotingId(turnId);
+    setPromoteError(null);
+
+    try {
+      const response = await fetch(`/api/assets/${assetId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ promoted: true, status: "pending_review" })
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | { asset?: Asset; error?: string }
+        | null;
+
+      if (!response.ok || !payload?.asset) {
+        setPromoteError(payload?.error ?? "Failed to save as asset.");
+        return;
+      }
+
+      setMessages((current) =>
+        current.map((turn) => (turn.id === turnId && turn.role === "assistant" ? { ...turn, promoted: true } : turn))
+      );
+      onAssetChanged?.();
+    } catch {
+      setPromoteError("Network error. Please try again.");
+    } finally {
+      setPromotingId(null);
+    }
+  };
+
+  const isSystemPromptCustom = systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT;
 
   return (
-    <section className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:p-5">
-      <div className="mb-4">
+    <section className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:p-5">
+      <div>
         <h2 className="text-lg font-semibold text-slate-100">AI Workspace</h2>
-        <p className="mt-1 text-sm text-slate-400">Draft and stage content before scanning and approval.</p>
+        <p className="mt-1 text-sm text-slate-400">
+          Iterate in chat. Save responses that matter as assets to route them through review.
+        </p>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div className="rounded-lg border border-slate-800 bg-slate-950/40">
-          <button
-            type="button"
-            onClick={() => setSystemPromptOpen((open) => !open)}
-            aria-expanded={systemPromptOpen}
-            className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium text-slate-200 hover:text-slate-100"
-          >
-            <span>
-              System Prompt
-              {systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT ? (
-                <span className="ml-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-200">
-                  custom
-                </span>
-              ) : null}
-            </span>
-            <span aria-hidden className="text-xs text-slate-400">{systemPromptOpen ? "Hide" : "Show"}</span>
-          </button>
-          {systemPromptOpen ? (
-            <div className="border-t border-slate-800 px-3 py-2">
-              <textarea
-                id="system-prompt"
-                value={systemPrompt}
-                onChange={(event) => setSystemPrompt(event.target.value)}
-                disabled={isLoading}
-                placeholder={DEFAULT_SYSTEM_PROMPT}
-                className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-              />
-              <div className="mt-2 flex items-center justify-between">
-                <p className="text-xs text-slate-500">Sent as the system role to the model.</p>
-                <button
-                  type="button"
-                  onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
-                  disabled={isLoading || systemPrompt === DEFAULT_SYSTEM_PROMPT}
-                  className="text-xs text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  Reset to default
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <label htmlFor="prompt" className="block text-sm font-medium text-slate-200">
-          Prompt
-        </label>
-        <textarea
-          id="prompt"
-          value={prompt}
-          onChange={(event) => setPrompt(event.target.value)}
-          disabled={isLoading}
-          placeholder="Describe the content you want to generate..."
-          className="min-h-36 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-        />
-
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-          <div className="w-full max-w-xs">
-            <label htmlFor="model-mode" className="mb-1 block text-sm font-medium text-slate-200">
-              Model Mode
-            </label>
-            <select
-              id="model-mode"
-              value={modelMode}
-              onChange={(event) => setModelMode(event.target.value as ModelMode)}
-              disabled={isLoading}
-              className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-            >
-              {MODEL_MODES.map((mode) => (
-                <option key={mode} value={mode}>
-                  {mode}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {isLoading ? "Generating..." : "Generate"}
-          </button>
-        </div>
-      </form>
-
-      {status === "error" && errorMessage ? (
-        <p className="mt-4 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-          {errorMessage}
-        </p>
-      ) : null}
-
-      {status === "success" && output !== null ? (
-        <div className="mt-4 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Output</p>
-            <div className="flex items-center gap-2">
-              {scan ? (
-                <>
-                  <span className="text-xs text-slate-400">Risk</span>
-                  <RiskBadge risk={scan.riskLevel} />
-                </>
-              ) : null}
+      <div className="rounded-lg border border-slate-800 bg-slate-950/40">
+        <button
+          type="button"
+          onClick={() => setSystemPromptOpen((open) => !open)}
+          aria-expanded={systemPromptOpen}
+          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium text-slate-200 hover:text-slate-100"
+        >
+          <span>
+            System Prompt
+            {isSystemPromptCustom ? (
+              <span className="ml-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-200">
+                custom
+              </span>
+            ) : null}
+          </span>
+          <span aria-hidden className="text-xs text-slate-400">{systemPromptOpen ? "Hide" : "Show"}</span>
+        </button>
+        {systemPromptOpen ? (
+          <div className="border-t border-slate-800 px-3 py-2">
+            <textarea
+              id="system-prompt"
+              value={systemPrompt}
+              onChange={(event) => setSystemPrompt(event.target.value)}
+              disabled={isPending}
+              placeholder={DEFAULT_SYSTEM_PROMPT}
+              className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
+            />
+            <div className="mt-2 flex items-center justify-between">
+              <p className="text-xs text-slate-500">Applied to the whole thread.</p>
               <button
                 type="button"
-                onClick={handleCopy}
-                disabled={!output}
-                className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
+                onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
+                disabled={isPending || systemPrompt === DEFAULT_SYSTEM_PROMPT}
+                className="text-xs text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {copied ? "Copied" : "Copy"}
+                Reset to default
               </button>
             </div>
           </div>
-          <div className="max-h-96 overflow-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
-            {output ? (
-              <ReactMarkdown components={MARKDOWN_COMPONENTS}>{output}</ReactMarkdown>
-            ) : (
-              <p className="text-slate-400">No output returned.</p>
-            )}
-          </div>
-          {scan && scan.findings.length > 0 ? (
-            <div>
-              <p className="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
-                Findings ({scan.findings.length})
-              </p>
-              <ul className="space-y-1">
-                {scan.findings.map((finding, index) => (
-                  <li
-                    key={`${finding.rule}-${index}`}
-                    className="flex items-center justify-between gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-slate-300"
-                  >
-                    <span className="truncate">
-                      <span className="text-slate-400">{finding.source}</span> · {finding.rule} ·{" "}
-                      <span className="text-slate-100">{finding.match}</span>
-                    </span>
-                    <RiskBadge risk={finding.severity} />
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
+        ) : null}
+      </div>
 
-          {asset ? (
-            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-800 pt-3">
-              <p className="text-xs text-slate-400">
-                Status: <span className="text-slate-200">{asset.status}</span>
-              </p>
-              {asset.status === "draft" ? (
+      <div
+        ref={threadRef}
+        className="flex h-[28rem] flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-3"
+        aria-live="polite"
+      >
+        {messages.length === 0 && !isPending ? (
+          <p className="m-auto text-sm text-slate-500">Start the conversation below.</p>
+        ) : null}
+
+        {messages.map((turn) =>
+          turn.role === "user" ? (
+            <div key={turn.id} className="flex justify-end">
+              <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-cyan-500/15 px-3 py-2 text-sm text-cyan-100">
+                {turn.content}
+              </div>
+            </div>
+          ) : (
+            <div key={turn.id} className="flex flex-col gap-1.5">
+              <div className="max-w-[90%] rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
+                <ReactMarkdown components={MARKDOWN_COMPONENTS}>{turn.content}</ReactMarkdown>
+              </div>
+              <div className="flex items-center gap-2 pl-1 text-xs">
+                <RiskBadge risk={turn.scan.riskLevel} />
                 <button
                   type="button"
-                  onClick={handleSubmitForReview}
-                  disabled={submitStatus === "loading"}
-                  className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-1.5 text-xs font-medium text-cyan-200 hover:bg-cyan-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => handleCopy(turn.id, turn.content)}
+                  className="text-slate-400 hover:text-slate-200"
                 >
-                  {submitStatus === "loading" ? "Submitting..." : "Submit for Review"}
+                  {copiedId === turn.id ? "Copied" : "Copy"}
                 </button>
-              ) : (
-                <p className="text-xs text-slate-400">Submitted for review.</p>
-              )}
+                <span className="text-slate-700">·</span>
+                <button
+                  type="button"
+                  onClick={() => handlePromote(turn.id, turn.assetId)}
+                  disabled={turn.promoted || promotingId === turn.id}
+                  className={`transition ${
+                    turn.promoted
+                      ? "text-emerald-300"
+                      : "text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                  }`}
+                >
+                  {turn.promoted ? "Saved as asset" : promotingId === turn.id ? "Saving..." : "Save as Asset"}
+                </button>
+              </div>
             </div>
-          ) : null}
+          )
+        )}
 
-          {submitStatus === "error" && submitError ? (
-            <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-              {submitError}
-            </p>
-          ) : null}
-        </div>
+        {isPending ? (
+          <div className="flex justify-start">
+            <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400">
+              Thinking...
+            </div>
+          </div>
+        ) : null}
+
+        {error ? (
+          <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+            {error}
+          </div>
+        ) : null}
+      </div>
+
+      {promoteError ? (
+        <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {promoteError}
+        </p>
       ) : null}
+
+      <form onSubmit={handleSubmit} className="flex flex-col gap-2 sm:flex-row sm:items-end">
+        <textarea
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          onKeyDown={handleKeyDown}
+          disabled={isPending}
+          rows={1}
+          placeholder="Message the assistant... (Enter to send, Shift+Enter for newline)"
+          className="min-h-[42px] w-full flex-1 resize-none rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
+        />
+        <div className="flex items-center gap-2">
+          <label htmlFor="model-mode" className="sr-only">
+            Model Mode
+          </label>
+          <select
+            id="model-mode"
+            value={modelMode}
+            onChange={(event) => setModelMode(event.target.value as ModelMode)}
+            disabled={isPending}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-2 py-2 text-sm text-slate-100 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
+          >
+            {MODEL_MODES.map((mode) => (
+              <option key={mode} value={mode}>
+                {mode}
+              </option>
+            ))}
+          </select>
+          <button
+            type="submit"
+            disabled={isPending || !input.trim()}
+            className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-medium text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isPending ? "Sending..." : "Send"}
+          </button>
+        </div>
+      </form>
     </section>
   );
 }
