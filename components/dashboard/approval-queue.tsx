@@ -1,46 +1,71 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { Image as ImageIcon, Video } from "lucide-react";
 import type { Asset, AssetStatus } from "@/lib/types";
-import { RiskBadge } from "@/components/dashboard/risk-badge";
 
 type Status = "idle" | "loading" | "success" | "error";
 
 type ApprovalQueueProps = {
   refreshKey?: number;
   onAction?: () => void;
+  onSelectAsset?: (asset: Asset) => void;
+  onCountChange?: (count: number) => void;
 };
 
-export function ApprovalQueue({ refreshKey = 0, onAction }: ApprovalQueueProps) {
+function formatClock(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function Thumbnail({ asset }: { asset: Asset }) {
+  if (asset.media_url && asset.media_type === "image") {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={asset.media_url}
+        alt=""
+        className="h-12 w-12 shrink-0 rounded-lg border border-line-soft object-cover"
+      />
+    );
+  }
+  if (asset.media_url && asset.media_type === "video") {
+    return (
+      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-line-soft bg-canvas-input text-ink-400">
+        <Video className="h-5 w-5" />
+      </div>
+    );
+  }
+  return (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-line-soft bg-canvas-input text-ink-400">
+      <ImageIcon className="h-5 w-5" />
+    </div>
+  );
+}
+
+export function ApprovalQueue({ refreshKey = 0, onAction, onSelectAsset, onCountChange }: ApprovalQueueProps) {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [status, setStatus] = useState<Status>("idle");
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [pendingId, setPendingId] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setStatus("loading");
-    setErrorMessage(null);
-
     try {
       const response = await fetch("/api/assets?status=pending_review&promoted=true", { method: "GET" });
-      const payload = (await response.json().catch(() => null)) as
-        | { assets?: Asset[]; error?: string }
-        | null;
-
+      const payload = (await response.json().catch(() => null)) as { assets?: Asset[] } | null;
       if (!response.ok) {
         setStatus("error");
-        setErrorMessage(payload?.error ?? "Failed to load approval queue.");
         return;
       }
-
-      setAssets(payload?.assets ?? []);
+      const rows = payload?.assets ?? [];
+      setAssets(rows);
+      onCountChange?.(rows.length);
       setStatus("success");
     } catch {
       setStatus("error");
-      setErrorMessage("Network error. Please try again.");
     }
-  }, []);
+  }, [onCountChange]);
 
   useEffect(() => {
     load();
@@ -48,91 +73,83 @@ export function ApprovalQueue({ refreshKey = 0, onAction }: ApprovalQueueProps) 
 
   const transition = async (id: string, next: AssetStatus) => {
     setPendingId(id);
-    setActionError(null);
-
     try {
       const response = await fetch(`/api/assets/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: next })
       });
-
-      if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        setActionError(payload?.error ?? `Failed to ${next === "approved" ? "approve" : "reject"}.`);
-        return;
-      }
-
-      setAssets((current) => current.filter((asset) => asset.id !== id));
+      if (!response.ok) return;
+      setAssets((current) => {
+        const next = current.filter((asset) => asset.id !== id);
+        onCountChange?.(next.length);
+        return next;
+      });
       onAction?.();
-    } catch {
-      setActionError("Network error. Please try again.");
     } finally {
       setPendingId(null);
     }
   };
 
-  if (status === "error" && errorMessage) {
-    return (
-      <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
-        {errorMessage}
-      </p>
-    );
-  }
-
-  if (status !== "success") {
-    return <p className="text-sm text-slate-400">Loading approval queue...</p>;
-  }
-
-  if (assets.length === 0) {
-    return <p className="text-sm text-slate-400">Nothing waiting on review.</p>;
-  }
-
   return (
-    <div className="space-y-2">
-      {actionError ? (
-        <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-          {actionError}
-        </p>
+    <section className="rounded-xl border border-line-soft bg-canvas-card p-4">
+      <header className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-ink-100">Approvals Queue</h3>
+        <button type="button" className="text-xs text-accent-cyan hover:underline">
+          View all
+        </button>
+      </header>
+
+      {status === "loading" ? <p className="text-xs text-ink-500">Loading…</p> : null}
+      {status === "error" ? <p className="text-xs text-signal-danger">Failed to load.</p> : null}
+      {status === "success" && assets.length === 0 ? (
+        <p className="text-xs text-ink-500">Nothing waiting on review.</p>
       ) : null}
-      <ul className="max-h-80 space-y-2 overflow-auto">
-        {assets.map((asset) => {
+
+      <ul className="space-y-3">
+        {assets.slice(0, 4).map((asset) => {
           const isPending = pendingId === asset.id;
-          const findingCount = asset.scan_findings?.length ?? 0;
           return (
-            <li key={asset.id} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm text-slate-100">{asset.prompt}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {asset.model} · {new Date(asset.created_at).toLocaleString()}
-                    {findingCount > 0 ? ` · ${findingCount} finding${findingCount === 1 ? "" : "s"}` : ""}
-                  </p>
+            <li key={asset.id}>
+              <button
+                type="button"
+                onClick={() => onSelectAsset?.(asset)}
+                className="flex w-full items-start gap-3 rounded-lg p-1.5 text-left hover:bg-canvas-hover"
+              >
+                <Thumbnail asset={asset} />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-ink-100">{asset.prompt}</p>
+                  <p className="mt-0.5 text-xs text-ink-500">Requested by you</p>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <span className="inline-flex items-center rounded-full bg-signal-warning/15 px-2 py-0.5 text-[10px] font-medium text-signal-warning">
+                      Pending
+                    </span>
+                    <span className="text-[10px] text-ink-500">{formatClock(asset.created_at)}</span>
+                  </div>
                 </div>
-                <RiskBadge risk={asset.risk_level} />
-              </div>
-              <div className="mt-2 flex items-center justify-end gap-2">
+              </button>
+              <div className="mt-2 flex items-center justify-end gap-2 pl-[60px]">
                 <button
                   type="button"
                   onClick={() => transition(asset.id, "rejected")}
                   disabled={isPending}
-                  className="rounded-md border border-rose-500/40 bg-rose-500/10 px-2 py-1 text-xs text-rose-200 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-md border border-line-soft px-2 py-1 text-[11px] text-ink-300 hover:border-signal-danger/50 hover:text-signal-danger disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isPending ? "..." : "Reject"}
+                  Reject
                 </button>
                 <button
                   type="button"
                   onClick={() => transition(asset.id, "approved")}
                   disabled={isPending}
-                  className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200 hover:bg-emerald-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  className="rounded-md bg-accent-primary px-2 py-1 text-[11px] font-medium text-white hover:bg-accent-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {isPending ? "..." : "Approve"}
+                  Approve
                 </button>
               </div>
             </li>
           );
         })}
       </ul>
-    </div>
+    </section>
   );
 }

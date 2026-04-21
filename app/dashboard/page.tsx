@@ -1,16 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Menu } from "lucide-react";
 import { getCurrentUser, signOut } from "@/lib/supabase/auth";
 import { AIWorkspace } from "@/components/dashboard/ai-workspace";
+import { ActivityTimeline } from "@/components/dashboard/activity-timeline";
 import { ApprovalQueue } from "@/components/dashboard/approval-queue";
-import { AuditTrailCard } from "@/components/dashboard/audit-trail-card";
-import { Header } from "@/components/dashboard/header";
+import { ConnectedAccounts } from "@/components/dashboard/connected-accounts";
 import { InsightsCard } from "@/components/dashboard/insights-card";
-import { LeftRail, type NavItem } from "@/components/dashboard/left-rail";
-import { PanelCard } from "@/components/dashboard/panel-card";
-import { PromotedAssetsCard } from "@/components/dashboard/promoted-assets-card";
+import { LeftRail, type NavKey } from "@/components/dashboard/left-rail";
 
 type DashboardState = {
   loading: boolean;
@@ -18,14 +17,14 @@ type DashboardState = {
   error: string | null;
 };
 
-const NAV_ITEMS: NavItem[] = [
-  { label: "Workspace", targetId: "panel-workspace" },
-  { label: "Approvals", targetId: "panel-approvals" },
-  { label: "Assets", targetId: "panel-assets" },
-  { label: "Audit Trail", targetId: "panel-audit" },
-  { label: "Insights", targetId: "panel-insights" },
-  { label: "Settings" }
-];
+const NAV_SCROLL_TARGETS: Record<NavKey, string | null> = {
+  workspace: "workspace-anchor",
+  approvals: "approvals-card",
+  assets: "approvals-card",
+  audit: "activity-card",
+  insights: "insights-card",
+  settings: null
+};
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -37,16 +36,18 @@ export default function DashboardPage() {
   const [assetRefreshKey, setAssetRefreshKey] = useState(0);
   const [conversationRefreshKey, setConversationRefreshKey] = useState(0);
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const [activeNav, setActiveNav] = useState<NavKey>("workspace");
+  const [approvalsCount, setApprovalsCount] = useState(0);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
+  const rightRailRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     let isMounted = true;
 
     const bootstrap = async () => {
       const { user, error } = await getCurrentUser();
-
       if (!isMounted) return;
-
       if (error || !user) {
         router.replace("/login");
         return;
@@ -68,19 +69,14 @@ export default function DashboardPage() {
           }
         }
       } catch {
-        // Non-fatal: the dashboard will still render empty.
+        // Non-fatal: dashboard still renders empty.
       }
 
       if (!isMounted) return;
-      setState({
-        loading: false,
-        email: user.email ?? null,
-        error: null
-      });
+      setState({ loading: false, email: user.email ?? null, error: null });
     };
 
     bootstrap();
-
     return () => {
       isMounted = false;
     };
@@ -93,61 +89,82 @@ export default function DashboardPage() {
 
   const handleSelectConversation = (id: string | null) => {
     setActiveConversationId(id);
+    setActiveNav("workspace");
   };
 
   const handleNewChat = () => {
     setActiveConversationId(null);
+    setActiveNav("workspace");
   };
 
   const handleConversationCreated = (id: string) => {
-    setActiveConversationId(id);
+    if (id) {
+      setActiveConversationId(id);
+    } else {
+      setActiveConversationId(null);
+    }
     setConversationRefreshKey((key) => key + 1);
   };
 
-  const bumpAssets = () => {
+  const bumpAssets = useCallback(() => {
     setAssetRefreshKey((key) => key + 1);
-    setConversationRefreshKey((key) => key + 1); // touch updated_at so list reorders
+    setConversationRefreshKey((key) => key + 1);
+  }, []);
+
+  const handleSelectNav = (key: NavKey) => {
+    setActiveNav(key);
+    const targetId = NAV_SCROLL_TARGETS[key];
+    if (targetId && typeof document !== "undefined") {
+      document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
   };
+
+  const handleApprovalsCount = useCallback((count: number) => {
+    setApprovalsCount(count);
+  }, []);
 
   if (state.loading) {
     return (
-      <main className="mx-auto flex min-h-screen w-full max-w-7xl items-center justify-center px-6 py-16">
-        <p className="text-sm text-slate-300">Loading dashboard...</p>
+      <main className="flex h-screen w-full items-center justify-center bg-canvas-base">
+        <p className="text-sm text-ink-400">Loading dashboard…</p>
       </main>
     );
   }
 
+  const leftRail = (
+    <LeftRail
+      activeConversationId={activeConversationId}
+      activeNav={activeNav}
+      conversationsRefreshKey={conversationRefreshKey}
+      approvalsCount={approvalsCount}
+      userEmail={state.email}
+      onSelectConversation={handleSelectConversation}
+      onSelectNav={handleSelectNav}
+      onNewChat={handleNewChat}
+      onLogout={handleLogout}
+      onClose={() => setMobileNavOpen(false)}
+    />
+  );
+
   return (
-    <main className="mx-auto flex min-h-screen w-full max-w-7xl flex-col gap-4 px-4 py-4 md:px-6 md:py-6">
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => setMobileNavOpen(true)}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-200 hover:border-slate-500 md:hidden"
-          aria-label="Open navigation"
-        >
-          Menu
-        </button>
-        <div className="flex-1">
-          <Header email={state.email} onLogout={handleLogout} />
-        </div>
-      </div>
+    <div className="flex h-screen w-full bg-canvas-base text-ink-100">
+      <aside className="hidden w-[260px] shrink-0 flex-col border-r border-line-soft md:flex">
+        {leftRail}
+      </aside>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-[250px_minmax(0,1fr)] lg:grid-cols-[250px_minmax(0,1fr)_300px]">
-        <div className="hidden md:block md:row-start-1 md:h-fit md:sticky md:top-4">
-          <LeftRail
-            navItems={NAV_ITEMS}
-            activeConversationId={activeConversationId}
-            conversationsRefreshKey={conversationRefreshKey}
-            onSelectConversation={handleSelectConversation}
-            onNewChat={handleNewChat}
-          />
+      <main id="workspace-anchor" className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+        <div className="flex items-center gap-2 border-b border-line-soft px-4 py-3 md:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(true)}
+            className="rounded-md border border-line-soft p-2 text-ink-300 hover:bg-canvas-hover"
+            aria-label="Open navigation"
+          >
+            <Menu className="h-4 w-4" />
+          </button>
+          <p className="text-sm font-semibold text-ink-100">AI Control Plane</p>
         </div>
-
-        <div
-          id="panel-workspace"
-          className="flex min-h-[80vh] flex-col rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4 md:p-5"
-        >
+        <div className="flex-1 px-6 py-6">
           <AIWorkspace
             key={activeConversationId ?? "new"}
             conversationId={activeConversationId}
@@ -155,56 +172,43 @@ export default function DashboardPage() {
             onAssetChanged={bumpAssets}
           />
         </div>
+      </main>
 
-        <div className="flex flex-col gap-4 md:col-span-2 lg:col-span-1 lg:row-start-1 lg:col-start-3 lg:sticky lg:top-4 lg:h-fit">
-          <PanelCard id="panel-assets" title="Assets" subtitle="Latest saved assets">
-            <PromotedAssetsCard refreshKey={assetRefreshKey} />
-          </PanelCard>
-
-          <PanelCard id="panel-approvals" title="Approvals Queue" subtitle="Ready for review">
-            <ApprovalQueue refreshKey={assetRefreshKey} onAction={bumpAssets} />
-          </PanelCard>
-
-          <PanelCard id="panel-audit" title="Creation Audit Trail" subtitle="Publishing events">
-            <AuditTrailCard refreshKey={assetRefreshKey} />
-          </PanelCard>
-
-          <PanelCard id="panel-insights" title="Insights" subtitle="Pipeline at a glance">
-            <InsightsCard refreshKey={assetRefreshKey} />
-          </PanelCard>
+      <aside
+        ref={rightRailRef}
+        className="hidden w-[320px] shrink-0 flex-col gap-4 overflow-y-auto border-l border-line-soft bg-canvas-rail p-4 lg:flex"
+      >
+        <div id="approvals-card">
+          <ApprovalQueue
+            refreshKey={assetRefreshKey}
+            onAction={bumpAssets}
+            onCountChange={handleApprovalsCount}
+          />
         </div>
-      </div>
+        <div id="activity-card">
+          <ActivityTimeline refreshKey={assetRefreshKey} />
+        </div>
+        <div id="insights-card">
+          <InsightsCard refreshKey={assetRefreshKey} />
+        </div>
+        <ConnectedAccounts />
+      </aside>
 
       {mobileNavOpen ? (
         <div
-          className="fixed inset-0 z-40 bg-slate-950/80 md:hidden"
+          className="fixed inset-0 z-40 bg-canvas-base/80 md:hidden"
           role="dialog"
           aria-modal="true"
           onClick={() => setMobileNavOpen(false)}
         >
           <div
-            className="absolute left-0 top-0 h-full w-[280px] overflow-y-auto bg-slate-950 p-4"
+            className="absolute left-0 top-0 h-full w-[280px] overflow-y-auto bg-canvas-rail"
             onClick={(event) => event.stopPropagation()}
           >
-            <LeftRail
-              navItems={NAV_ITEMS}
-              activeConversationId={activeConversationId}
-              conversationsRefreshKey={conversationRefreshKey}
-              onSelectConversation={(id) => {
-                handleSelectConversation(id);
-                setMobileNavOpen(false);
-              }}
-              onNewChat={() => {
-                handleNewChat();
-                setMobileNavOpen(false);
-              }}
-              onClose={() => setMobileNavOpen(false)}
-            />
+            {leftRail}
           </div>
         </div>
       ) : null}
-
-      {state.error ? <p className="text-sm text-rose-300">{state.error}</p> : null}
-    </main>
+    </div>
   );
 }

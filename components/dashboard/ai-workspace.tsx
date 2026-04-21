@@ -13,6 +13,7 @@ import {
   StatusBadge
 } from "@/components/dashboard/destination-badge";
 import { InstagramPreview } from "@/components/dashboard/instagram-preview";
+import { PostView } from "@/components/dashboard/post-view";
 
 type ChatMode = "chat" | "instagram";
 
@@ -67,6 +68,7 @@ type AssistantTurn = {
   mediaUrl: string | null;
   mediaType: MediaType | null;
   mediaPrompt: string | null;
+  asset: Asset;
 };
 type ChatTurn = UserTurn | AssistantTurn;
 
@@ -115,7 +117,8 @@ function buildTurnsFromAssets(assets: Asset[]): ChatTurn[] {
       failureReason: asset.failure_reason,
       mediaUrl: asset.media_url,
       mediaType: asset.media_type,
-      mediaPrompt: asset.media_prompt
+      mediaPrompt: asset.media_prompt,
+      asset
     });
   }
   return turns;
@@ -190,7 +193,8 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
     failureReason: asset.failure_reason,
     mediaUrl: asset.media_url,
     mediaType: asset.media_type,
-    mediaPrompt: asset.media_prompt
+    mediaPrompt: asset.media_prompt,
+    asset
   });
 
   const sendChatMessage = async (userTurn: UserTurn, nextMessages: ChatTurn[]) => {
@@ -332,7 +336,8 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
               failureReason: updated.failure_reason,
               mediaUrl: updated.media_url,
               mediaType: updated.media_type,
-              mediaPrompt: updated.media_prompt
+              mediaPrompt: updated.media_prompt,
+              asset: updated
             }
           : turn
       )
@@ -551,6 +556,56 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
   };
 
   const isSystemPromptCustom = systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT;
+
+  let latestPostTurn: AssistantTurn | null = null;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const turn = messages[i];
+    if (turn.role === "assistant" && turn.mediaType === "image") {
+      latestPostTurn = turn;
+      break;
+    }
+  }
+
+  if (latestPostTurn && !isHydrating) {
+    const postTurn = latestPostTurn;
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-4">
+        {isPending ? (
+          <p className="text-xs text-ink-500">
+            {chatMode === "instagram"
+              ? "Generating a new post in the background…"
+              : "Working on your message…"}
+          </p>
+        ) : null}
+        {actionError ? (
+          <p className="rounded-md border border-signal-danger/40 bg-signal-danger/10 px-3 py-2 text-xs text-signal-danger">
+            {actionError}
+          </p>
+        ) : null}
+        {error ? (
+          <p className="rounded-md border border-signal-danger/40 bg-signal-danger/10 px-3 py-2 text-xs text-signal-danger">
+            {error}
+          </p>
+        ) : null}
+        <PostView
+          asset={postTurn.asset}
+          pending={pendingActionId === postTurn.id}
+          onBack={() => onConversationCreated?.("")}
+          onEditCaption={(assetId, caption) => handleEditCaption(postTurn.id, assetId, caption)}
+          onRegenerateImage={(assetId) =>
+            handleRegenerateImage(postTurn.id, assetId, postTurn.mediaPrompt)
+          }
+          onUploadMedia={(assetId, file) => handleUploadMedia(postTurn.id, assetId, file)}
+          onSendToApproval={(assetId) => handleSendToApproval(postTurn.id, assetId)}
+          onAssignDestination={(assetId, destination) =>
+            handleAssignDestination(postTurn.id, assetId, destination)
+          }
+          onQueuePublish={(assetId) => handlePublish(postTurn.id, assetId)}
+          onRetry={(assetId) => handleRetry(postTurn.id, assetId)}
+        />
+      </div>
+    );
+  }
 
   return (
     <section className="flex h-full min-h-0 flex-col">
