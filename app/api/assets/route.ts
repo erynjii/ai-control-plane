@@ -24,7 +24,7 @@ export async function GET(request: Request) {
 
   let query = supabase
     .from("assets")
-    .select("id, workspace_id, prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
+    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
     .order("created_at", { ascending: false })
     .limit(25);
 

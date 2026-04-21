@@ -4,8 +4,11 @@ import { MODEL_MODES, resolveModelForMode } from "@/lib/ai/model-mapping";
 import { scanContent } from "@/lib/scan";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
+const DEFAULT_SYSTEM_PROMPT = "You are a marketing content assistant.";
+
 const requestSchema = z.object({
   prompt: z.string().trim().min(1, "Prompt cannot be empty."),
+  systemPrompt: z.string().trim().min(1).default(DEFAULT_SYSTEM_PROMPT),
   modelMode: z.enum(MODEL_MODES),
   workspaceId: z.string().trim().min(1).default("default-workspace")
 });
@@ -36,7 +39,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Server configuration is incomplete." }, { status: 500 });
   }
 
-  const { prompt, modelMode, workspaceId } = parsedBody.data;
+  const { prompt, systemPrompt, modelMode, workspaceId } = parsedBody.data;
 
   const supabase = createSupabaseServerClient();
 
@@ -60,7 +63,7 @@ export async function POST(request: Request) {
     body: JSON.stringify({
       model: selectedModel,
       messages: [
-        { role: "system", content: "You are a marketing content assistant." },
+        { role: "system", content: systemPrompt },
         { role: "user", content: prompt }
       ]
     })
@@ -93,6 +96,7 @@ export async function POST(request: Request) {
       workspace_id: workspaceId,
       user_id: user.id,
       prompt,
+      system_prompt: systemPrompt,
       output: outputText,
       model: selectedModel,
       status: "draft",
@@ -101,7 +105,7 @@ export async function POST(request: Request) {
       created_at: now,
       updated_at: now
     })
-    .select("id, workspace_id, user_id, prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
+    .select("id, workspace_id, user_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, created_at, updated_at")
     .single();
 
   if (insertError) {

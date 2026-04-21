@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
 import type { ScanResult } from "@/lib/scan";
 import type { Asset } from "@/lib/types";
@@ -9,12 +10,49 @@ import { RiskBadge } from "@/components/dashboard/risk-badge";
 type Status = "idle" | "loading" | "success" | "error";
 type SubmitStatus = "idle" | "loading" | "submitted" | "error";
 
+const DEFAULT_SYSTEM_PROMPT = "You are a marketing content assistant.";
+
+const MARKDOWN_COMPONENTS = {
+  h1: ({ children }: { children?: React.ReactNode }) => (
+    <h1 className="mb-2 mt-3 text-lg font-semibold text-slate-100">{children}</h1>
+  ),
+  h2: ({ children }: { children?: React.ReactNode }) => (
+    <h2 className="mb-2 mt-3 text-base font-semibold text-slate-100">{children}</h2>
+  ),
+  h3: ({ children }: { children?: React.ReactNode }) => (
+    <h3 className="mb-1 mt-3 text-sm font-semibold text-slate-100">{children}</h3>
+  ),
+  p: ({ children }: { children?: React.ReactNode }) => <p className="mb-2 leading-relaxed">{children}</p>,
+  ul: ({ children }: { children?: React.ReactNode }) => (
+    <ul className="mb-2 list-disc space-y-1 pl-5">{children}</ul>
+  ),
+  ol: ({ children }: { children?: React.ReactNode }) => (
+    <ol className="mb-2 list-decimal space-y-1 pl-5">{children}</ol>
+  ),
+  code: ({ children }: { children?: React.ReactNode }) => (
+    <code className="rounded bg-slate-900 px-1 py-0.5 text-xs">{children}</code>
+  ),
+  pre: ({ children }: { children?: React.ReactNode }) => (
+    <pre className="mb-2 overflow-auto rounded bg-slate-900 p-2 text-xs">{children}</pre>
+  ),
+  a: ({ href, children }: { href?: string; children?: React.ReactNode }) => (
+    <a href={href} className="text-cyan-300 underline" target="_blank" rel="noreferrer">
+      {children}
+    </a>
+  ),
+  blockquote: ({ children }: { children?: React.ReactNode }) => (
+    <blockquote className="mb-2 border-l-2 border-slate-700 pl-3 text-slate-300">{children}</blockquote>
+  )
+};
+
 type AIWorkspaceProps = {
   onAssetChanged?: () => void;
 };
 
 export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
   const [prompt, setPrompt] = useState("");
+  const [systemPrompt, setSystemPrompt] = useState(DEFAULT_SYSTEM_PROMPT);
+  const [systemPromptOpen, setSystemPromptOpen] = useState(false);
   const [modelMode, setModelMode] = useState<ModelMode>("Auto");
   const [status, setStatus] = useState<Status>("idle");
   const [output, setOutput] = useState<string | null>(null);
@@ -23,6 +61,7 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
   const [submitStatus, setSubmitStatus] = useState<SubmitStatus>("idle");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -34,6 +73,8 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
       return;
     }
 
+    const trimmedSystemPrompt = systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT;
+
     setStatus("loading");
     setOutput(null);
     setScan(null);
@@ -41,6 +82,7 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
     setSubmitStatus("idle");
     setSubmitError(null);
     setErrorMessage(null);
+    setCopied(false);
 
     try {
       const response = await fetch("/api/generate", {
@@ -48,6 +90,7 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           prompt: trimmedPrompt,
+          systemPrompt: trimmedSystemPrompt,
           modelMode
         })
       });
@@ -105,6 +148,17 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
     }
   };
 
+  const handleCopy = async () => {
+    if (!output) return;
+    try {
+      await navigator.clipboard.writeText(output);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard access denied; ignore.
+    }
+  };
+
   const isLoading = status === "loading";
 
   return (
@@ -115,6 +169,48 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="rounded-lg border border-slate-800 bg-slate-950/40">
+          <button
+            type="button"
+            onClick={() => setSystemPromptOpen((open) => !open)}
+            aria-expanded={systemPromptOpen}
+            className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium text-slate-200 hover:text-slate-100"
+          >
+            <span>
+              System Prompt
+              {systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT ? (
+                <span className="ml-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-200">
+                  custom
+                </span>
+              ) : null}
+            </span>
+            <span aria-hidden className="text-xs text-slate-400">{systemPromptOpen ? "Hide" : "Show"}</span>
+          </button>
+          {systemPromptOpen ? (
+            <div className="border-t border-slate-800 px-3 py-2">
+              <textarea
+                id="system-prompt"
+                value={systemPrompt}
+                onChange={(event) => setSystemPrompt(event.target.value)}
+                disabled={isLoading}
+                placeholder={DEFAULT_SYSTEM_PROMPT}
+                className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
+              />
+              <div className="mt-2 flex items-center justify-between">
+                <p className="text-xs text-slate-500">Sent as the system role to the model.</p>
+                <button
+                  type="button"
+                  onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
+                  disabled={isLoading || systemPrompt === DEFAULT_SYSTEM_PROMPT}
+                  className="text-xs text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Reset to default
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+
         <label htmlFor="prompt" className="block text-sm font-medium text-slate-200">
           Prompt
         </label>
@@ -165,18 +261,32 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
 
       {status === "success" && output !== null ? (
         <div className="mt-4 space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">Output</p>
-            {scan ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-400">Risk</span>
-                <RiskBadge risk={scan.riskLevel} />
-              </div>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {scan ? (
+                <>
+                  <span className="text-xs text-slate-400">Risk</span>
+                  <RiskBadge risk={scan.riskLevel} />
+                </>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleCopy}
+                disabled={!output}
+                className="rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-200 hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {copied ? "Copied" : "Copy"}
+              </button>
+            </div>
           </div>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
-            {output || "No output returned."}
-          </pre>
+          <div className="max-h-96 overflow-auto rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
+            {output ? (
+              <ReactMarkdown components={MARKDOWN_COMPONENTS}>{output}</ReactMarkdown>
+            ) : (
+              <p className="text-slate-400">No output returned.</p>
+            )}
+          </div>
           {scan && scan.findings.length > 0 ? (
             <div>
               <p className="mb-1 text-xs font-semibold uppercase tracking-[0.16em] text-slate-400">
