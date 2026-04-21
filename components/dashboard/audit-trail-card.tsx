@@ -9,15 +9,6 @@ type AuditTrailCardProps = {
   refreshKey?: number;
 };
 
-const ACTION_LABELS: Record<string, string> = {
-  destination_assigned: "Destination assigned",
-  queued: "Queued",
-  publish_started: "Publishing",
-  publish_succeeded: "Published",
-  publish_failed: "Publish failed",
-  retry_triggered: "Retry triggered"
-};
-
 const ACTION_TONE: Record<string, string> = {
   destination_assigned: "text-slate-200",
   queued: "text-amber-200",
@@ -27,14 +18,55 @@ const ACTION_TONE: Record<string, string> = {
   retry_triggered: "text-amber-200"
 };
 
-function getDestinationFromMetadata(metadata: Record<string, unknown>): string | null {
-  const destination = metadata.destination;
-  return typeof destination === "string" ? destination : null;
+function getString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === "string" ? value : null;
 }
 
-function getReasonFromMetadata(metadata: Record<string, unknown>): string | null {
-  const reason = metadata.reason;
-  return typeof reason === "string" ? reason : null;
+function titleCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function describe(event: AuditEvent): string {
+  const destination = getString(event.metadata, "destination");
+  const destinationLabel = destination ? titleCase(destination) : null;
+  switch (event.action) {
+    case "destination_assigned":
+      return destinationLabel
+        ? `Destination assigned: ${destinationLabel}`
+        : "Destination assigned";
+    case "queued":
+      return destinationLabel ? `Queued for ${destinationLabel}` : "Queued";
+    case "publish_started":
+      return destinationLabel ? `Publishing to ${destinationLabel}` : "Publishing";
+    case "publish_succeeded":
+      return destinationLabel ? `Published to ${destinationLabel}` : "Published";
+    case "publish_failed": {
+      const reason = getString(event.metadata, "reason");
+      const base = destinationLabel ? `Publish failed (${destinationLabel})` : "Publish failed";
+      return reason ? `${base}: ${reason}` : base;
+    }
+    case "retry_triggered":
+      return destinationLabel ? `Retry triggered for ${destinationLabel}` : "Retry triggered";
+    default:
+      return event.action;
+  }
+}
+
+function relativeTime(iso: string): string {
+  const now = Date.now();
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "";
+  const diffSec = Math.round((now - then) / 1000);
+  if (diffSec < 45) return "just now";
+  if (diffSec < 90) return "1m ago";
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.round(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.round(diffHr / 24);
+  if (diffDay < 7) return `${diffDay}d ago`;
+  return new Date(iso).toLocaleDateString();
 }
 
 export function AuditTrailCard({ refreshKey = 0 }: AuditTrailCardProps) {
@@ -74,22 +106,14 @@ export function AuditTrailCard({ refreshKey = 0 }: AuditTrailCardProps) {
   return (
     <ul className="max-h-80 space-y-2 overflow-auto">
       {events.map((event) => {
-        const label = ACTION_LABELS[event.action] ?? event.action;
         const tone = ACTION_TONE[event.action] ?? "text-slate-200";
-        const destination = getDestinationFromMetadata(event.metadata);
-        const reason = getReasonFromMetadata(event.metadata);
+        const description = describe(event);
         return (
           <li key={event.id} className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className={`text-xs font-medium ${tone}`}>{label}</span>
-              {destination ? (
-                <span className="rounded-md border border-slate-700 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-300">
-                  {destination}
-                </span>
-              ) : null}
+            <div className="flex items-start justify-between gap-2">
+              <span className={`text-xs font-medium ${tone}`}>{description}</span>
+              <span className="shrink-0 text-[10px] text-slate-500">{relativeTime(event.created_at)}</span>
             </div>
-            <p className="mt-1 text-[10px] text-slate-500">{new Date(event.created_at).toLocaleString()}</p>
-            {reason ? <p className="mt-1 text-[10px] text-rose-300">{reason}</p> : null}
           </li>
         );
       })}

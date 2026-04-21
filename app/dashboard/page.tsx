@@ -42,7 +42,7 @@ export default function DashboardPage() {
   useEffect(() => {
     let isMounted = true;
 
-    const loadUser = async () => {
+    const bootstrap = async () => {
       const { user, error } = await getCurrentUser();
 
       if (!isMounted) return;
@@ -52,6 +52,26 @@ export default function DashboardPage() {
         return;
       }
 
+      try {
+        const response = await fetch("/api/conversations");
+        if (response.ok) {
+          const payload = (await response.json().catch(() => null)) as
+            | { conversations?: Array<{ id: string }> }
+            | null;
+          const existing = payload?.conversations ?? [];
+          if (existing.length === 0) {
+            const seedResponse = await fetch("/api/seed", { method: "POST" });
+            if (seedResponse.ok && isMounted) {
+              setAssetRefreshKey((key) => key + 1);
+              setConversationRefreshKey((key) => key + 1);
+            }
+          }
+        }
+      } catch {
+        // Non-fatal: the dashboard will still render empty.
+      }
+
+      if (!isMounted) return;
       setState({
         loading: false,
         email: user.email ?? null,
@@ -59,7 +79,7 @@ export default function DashboardPage() {
       });
     };
 
-    loadUser();
+    bootstrap();
 
     return () => {
       isMounted = false;
@@ -124,7 +144,10 @@ export default function DashboardPage() {
           />
         </div>
 
-        <div id="panel-workspace" className="flex min-h-[70vh] flex-col scroll-mt-4">
+        <div
+          id="panel-workspace"
+          className="flex min-h-[80vh] flex-col rounded-xl border border-slate-800 bg-slate-900/70 p-4 scroll-mt-4 md:p-5"
+        >
           <AIWorkspace
             key={activeConversationId ?? "new"}
             conversationId={activeConversationId}

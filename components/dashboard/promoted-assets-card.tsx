@@ -3,6 +3,11 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Asset } from "@/lib/types";
 import { RiskBadge } from "@/components/dashboard/risk-badge";
+import {
+  DestinationBadge,
+  PublishStatusBadge,
+  StatusBadge
+} from "@/components/dashboard/destination-badge";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -50,18 +55,16 @@ export function PromotedAssetsCard({ refreshKey = 0, onViewAll }: PromotedAssets
       <ul className="space-y-2">
         {assets.map((asset) => (
           <li key={asset.id} className="rounded-lg border border-slate-800 bg-slate-950 px-2 py-2">
-            <div className="flex items-center justify-between gap-2">
-              <span className="truncate text-xs text-slate-100">{asset.prompt}</span>
-              <div className="flex shrink-0 items-center gap-1">
-                <RiskBadge risk={asset.risk_level} />
-              </div>
+            <p className="truncate text-xs text-slate-100">{asset.prompt}</p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1">
+              <RiskBadge risk={asset.risk_level} />
+              <StatusBadge status={asset.status} />
+              {asset.destination ? <DestinationBadge destination={asset.destination} /> : null}
+              <PublishStatusBadge status={asset.destination_status} />
             </div>
-            <div className="mt-1 flex items-center justify-between">
-              <p className="text-[10px] text-slate-500">{new Date(asset.created_at).toLocaleDateString()}</p>
-              <span className="rounded-md border border-slate-700 px-1.5 py-0.5 text-[9px] uppercase tracking-wide text-slate-300">
-                {asset.status}
-              </span>
-            </div>
+            <p className="mt-1 text-[10px] text-slate-500">
+              {new Date(asset.created_at).toLocaleDateString()}
+            </p>
           </li>
         ))}
       </ul>

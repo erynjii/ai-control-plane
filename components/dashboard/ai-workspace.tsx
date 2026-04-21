@@ -7,7 +7,11 @@ import type { ScanResult, Severity } from "@/lib/scan";
 import type { Asset } from "@/lib/types";
 import { DESTINATIONS, type Destination, type DestinationStatus } from "@/lib/integrations/types";
 import { RiskBadge } from "@/components/dashboard/risk-badge";
-import { DestinationBadge, PublishStatusBadge } from "@/components/dashboard/destination-badge";
+import {
+  DestinationBadge,
+  PublishStatusBadge,
+  StatusBadge
+} from "@/components/dashboard/destination-badge";
 
 const DEFAULT_SYSTEM_PROMPT = "You are a marketing content assistant.";
 
@@ -333,22 +337,47 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
     }
   };
 
-  const handlePublish = async (turnId: string, assetId: string) => {
-    setPendingActionId(turnId);
-    setActionError(null);
-    // Optimistically show "queued" while the mock flow runs.
+  const setTurnDestinationStatus = (turnId: string, nextStatus: DestinationStatus) => {
     setMessages((current) =>
       current.map((turn) =>
         turn.id === turnId && turn.role === "assistant"
-          ? { ...turn, destinationStatus: "queued", status: "queued", failureReason: null }
+          ? {
+              ...turn,
+              destinationStatus: nextStatus,
+              status:
+                nextStatus === "published"
+                  ? "published"
+                  : nextStatus === "failed"
+                  ? "failed"
+                  : nextStatus === "queued" || nextStatus === "publishing"
+                  ? "queued"
+                  : turn.status,
+              failureReason: nextStatus === "failed" ? turn.failureReason : null
+            }
           : turn
       )
     );
+  };
+
+  const runPublishFlow = async (
+    turnId: string,
+    assetId: string,
+    endpoint: "publish" | "retry"
+  ) => {
+    setPendingActionId(turnId);
+    setActionError(null);
+    setTurnDestinationStatus(turnId, "queued");
+
+    const publishingTimer = window.setTimeout(() => {
+      setTurnDestinationStatus(turnId, "publishing");
+    }, 1000);
+
     try {
-      const response = await fetch(`/api/assets/${assetId}/publish`, { method: "POST" });
+      const response = await fetch(`/api/assets/${assetId}/${endpoint}`, { method: "POST" });
       const payload = (await response.json().catch(() => null)) as
         | { asset?: Asset; error?: string }
         | null;
+      window.clearTimeout(publishingTimer);
       if (!response.ok || !payload?.asset) {
         setActionError(payload?.error ?? "Publish failed.");
         return;
@@ -356,95 +385,65 @@ export function AIWorkspace({ conversationId: initialConversationId, onConversat
       applyAssetToTurn(turnId, payload.asset);
       onAssetChanged?.();
     } catch {
+      window.clearTimeout(publishingTimer);
       setActionError("Network error. Please try again.");
     } finally {
       setPendingActionId(null);
     }
   };
 
-  const handleRetry = async (turnId: string, assetId: string) => {
-    setPendingActionId(turnId);
-    setActionError(null);
-    setMessages((current) =>
-      current.map((turn) =>
-        turn.id === turnId && turn.role === "assistant"
-          ? { ...turn, destinationStatus: "queued", status: "queued", failureReason: null }
-          : turn
-      )
-    );
-    try {
-      const response = await fetch(`/api/assets/${assetId}/retry`, { method: "POST" });
-      const payload = (await response.json().catch(() => null)) as
-        | { asset?: Asset; error?: string }
-        | null;
-      if (!response.ok || !payload?.asset) {
-        setActionError(payload?.error ?? "Retry failed.");
-        return;
-      }
-      applyAssetToTurn(turnId, payload.asset);
-      onAssetChanged?.();
-    } catch {
-      setActionError("Network error. Please try again.");
-    } finally {
-      setPendingActionId(null);
-    }
-  };
+  const handlePublish = (turnId: string, assetId: string) => runPublishFlow(turnId, assetId, "publish");
+  const handleRetry = (turnId: string, assetId: string) => runPublishFlow(turnId, assetId, "retry");
 
   const isSystemPromptCustom = systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT;
 
   return (
-    <section className="flex h-full flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:p-5">
-      <div>
-        <h2 className="text-lg font-semibold text-slate-100">AI Workspace</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          Iterate in chat. Save responses that matter, or send them straight to approval.
-        </p>
-      </div>
-
-      <div className="rounded-lg border border-slate-800 bg-slate-950/40">
+    <section className="flex h-full min-h-0 flex-col">
+      <div className="flex items-center justify-between border-b border-slate-800 px-1 pb-3">
         <button
           type="button"
           onClick={() => setSystemPromptOpen((open) => !open)}
           aria-expanded={systemPromptOpen}
-          className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm font-medium text-slate-200 hover:text-slate-100"
+          className="flex items-center gap-2 text-xs font-medium text-slate-400 hover:text-slate-200"
         >
-          <span>
-            System Prompt
-            {isSystemPromptCustom ? (
-              <span className="ml-2 rounded-md border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-200">
-                custom
-              </span>
-            ) : null}
+          <span>System Prompt</span>
+          {isSystemPromptCustom ? (
+            <span className="rounded-md border border-cyan-500/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-cyan-200">
+              custom
+            </span>
+          ) : null}
+          <span aria-hidden className="text-[10px] text-slate-500">
+            {systemPromptOpen ? "Hide" : "Show"}
           </span>
-          <span aria-hidden className="text-xs text-slate-400">{systemPromptOpen ? "Hide" : "Show"}</span>
         </button>
-        {systemPromptOpen ? (
-          <div className="border-t border-slate-800 px-3 py-2">
-            <textarea
-              value={systemPrompt}
-              onChange={(event) => setSystemPrompt(event.target.value)}
-              disabled={isPending}
-              placeholder={DEFAULT_SYSTEM_PROMPT}
-              className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
-            />
-            <div className="mt-2 flex items-center justify-between">
-              <p className="text-xs text-slate-500">Applied to the whole thread.</p>
-              <button
-                type="button"
-                onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
-                disabled={isPending || systemPrompt === DEFAULT_SYSTEM_PROMPT}
-                className="text-xs text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Reset to default
-              </button>
-            </div>
-          </div>
-        ) : null}
       </div>
+
+      {systemPromptOpen ? (
+        <div className="mt-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2">
+          <textarea
+            value={systemPrompt}
+            onChange={(event) => setSystemPrompt(event.target.value)}
+            disabled={isPending}
+            placeholder={DEFAULT_SYSTEM_PROMPT}
+            className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-cyan-400 focus:outline-none disabled:opacity-60"
+          />
+          <div className="mt-2 flex items-center justify-between">
+            <p className="text-xs text-slate-500">Applied to the whole thread.</p>
+            <button
+              type="button"
+              onClick={() => setSystemPrompt(DEFAULT_SYSTEM_PROMPT)}
+              disabled={isPending || systemPrompt === DEFAULT_SYSTEM_PROMPT}
+              className="text-xs text-slate-400 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Reset to default
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div
         ref={threadRef}
-        className="flex min-h-[20rem] flex-1 flex-col gap-4 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-3"
+        className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-4"
         aria-live="polite"
       >
         {isHydrating ? (
@@ -581,25 +580,22 @@ function AssistantBubble({
 }: AssistantBubbleProps) {
   const [destinationMenuOpen, setDestinationMenuOpen] = useState(false);
 
-  const inReview = turn.status === "pending_review";
-  const decided = turn.status === "approved" || turn.status === "rejected";
-  const isApproved = turn.status === "approved" || turn.destinationStatus !== "idle";
-  const hasDestination = turn.destination !== null;
-  const canPublish =
-    turn.status === "approved" &&
-    hasDestination &&
-    (turn.destinationStatus === "assigned" || turn.destinationStatus === "queued");
+  const isDraft = turn.status === "draft";
+  const isApproved = turn.status === "approved";
+  const canSaveAsAsset = isDraft && !turn.promoted;
+  const canSendToApproval = isDraft;
+  const canAssignDestination = isApproved && turn.destination === null;
+  const canQueuePublish = isApproved && turn.destinationStatus === "assigned";
   const canRetry = turn.destinationStatus === "failed";
-  const inFlight =
-    turn.destinationStatus === "queued" || turn.destinationStatus === "publishing";
 
-  let statusLabel: string | null = null;
-  if (turn.status === "pending_review") statusLabel = "In review";
-  else if (turn.status === "approved") statusLabel = "Approved";
-  else if (turn.status === "rejected") statusLabel = "Rejected";
-  else if (turn.status === "queued") statusLabel = "Queued";
-  else if (turn.status === "published") statusLabel = "Published";
-  else if (turn.status === "failed") statusLabel = "Failed";
+  const publishQueueLabel =
+    turn.destinationStatus === "queued"
+      ? "Queuing…"
+      : turn.destinationStatus === "publishing"
+      ? "Publishing…"
+      : pending
+      ? "Queuing…"
+      : "Queue Publish";
 
   const handleDestinationPick = (destination: Destination) => {
     setDestinationMenuOpen(false);
@@ -609,76 +605,63 @@ function AssistantBubble({
   return (
     <div className="flex items-start gap-2">
       <Avatar role="assistant" />
-      <div className="flex max-w-[90%] flex-col gap-1">
-        <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
+      <div className="flex max-w-[90%] flex-col gap-2">
+        <div className="rounded-2xl rounded-tl-sm border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 shadow-sm">
           <ReactMarkdown components={MARKDOWN_COMPONENTS}>{turn.content}</ReactMarkdown>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
+        <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] text-slate-500">{formatTime(turn.timestamp)}</span>
           <RiskBadge risk={turn.scan.riskLevel} />
-          {turn.promoted ? (
-            <span className="rounded-md border border-slate-700 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-300">
-              {turn.status}
-            </span>
-          ) : null}
+          <StatusBadge status={turn.status} />
           {turn.destination ? <DestinationBadge destination={turn.destination} /> : null}
           <PublishStatusBadge status={turn.destinationStatus} />
+        </div>
+        {turn.failureReason ? (
+          <p className="text-[10px] text-rose-300">Failure reason: {turn.failureReason}</p>
+        ) : null}
+        <div className="flex flex-wrap items-center gap-2 text-xs">
           <button type="button" onClick={onCopy} className="text-slate-400 hover:text-slate-200">
             {copied ? "Copied" : "Copy"}
           </button>
-          <span className="text-slate-700">·</span>
-          {turn.promoted ? (
-            <span className="text-emerald-300">Saved</span>
-          ) : (
-            <button
-              type="button"
-              onClick={onSaveAsAsset}
-              disabled={pending}
-              className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {pending ? "Saving..." : "Save as Asset"}
-            </button>
-          )}
-          <span className="text-slate-700">·</span>
-          {statusLabel ? (
-            <span
-              className={
-                turn.status === "published"
-                  ? "text-emerald-300"
-                  : turn.status === "failed"
-                  ? "text-rose-300"
-                  : turn.status === "queued"
-                  ? "text-amber-300"
-                  : decided
-                  ? "text-slate-300"
-                  : "text-amber-300"
-              }
-            >
-              {statusLabel}
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={onSendToApproval}
-              disabled={pending || inReview}
-              className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {pending ? "Sending..." : "Send to Approval"}
-            </button>
-          )}
-          {isApproved ? (
+          {canSaveAsAsset ? (
+            <>
+              <span className="text-slate-700">·</span>
+              <button
+                type="button"
+                onClick={onSaveAsAsset}
+                disabled={pending}
+                className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pending ? "Saving…" : "Save as Asset"}
+              </button>
+            </>
+          ) : null}
+          {canSendToApproval ? (
+            <>
+              <span className="text-slate-700">·</span>
+              <button
+                type="button"
+                onClick={onSendToApproval}
+                disabled={pending}
+                className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {pending ? "Sending…" : "Send to Approval"}
+              </button>
+            </>
+          ) : null}
+          {canAssignDestination ? (
             <>
               <span className="text-slate-700">·</span>
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setDestinationMenuOpen((open) => !open)}
-                  disabled={pending || inFlight || turn.destinationStatus === "published"}
+                  disabled={pending}
                   aria-haspopup="menu"
                   aria-expanded={destinationMenuOpen}
                   className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
-                  {hasDestination ? "Change Destination" : "Assign Destination"}
+                  Assign Destination
                 </button>
                 {destinationMenuOpen ? (
                   <div
@@ -701,16 +684,23 @@ function AssistantBubble({
               </div>
             </>
           ) : null}
-          {canPublish ? (
+          {canQueuePublish ? (
             <>
               <span className="text-slate-700">·</span>
               <button
                 type="button"
                 onClick={onPublish}
                 disabled={pending}
-                className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center gap-1 text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {pending || inFlight ? "Publishing..." : "Publish"}
+                {pending ? (
+                  <>
+                    <Spinner />
+                    {publishQueueLabel}
+                  </>
+                ) : (
+                  "Queue Publish"
+                )}
               </button>
             </>
           ) : null}
@@ -721,23 +711,30 @@ function AssistantBubble({
                 type="button"
                 onClick={onRetry}
                 disabled={pending}
-                className="text-amber-300 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
+                className="inline-flex items-center gap-1 text-amber-300 hover:text-amber-200 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {pending ? "Retrying..." : "Retry"}
+                {pending ? (
+                  <>
+                    <Spinner />
+                    Retrying…
+                  </>
+                ) : (
+                  "Retry"
+                )}
               </button>
             </>
           ) : null}
-          {turn.destinationStatus === "published" ? (
-            <>
-              <span className="text-slate-700">·</span>
-              <span className="text-emerald-300">Published</span>
-            </>
-          ) : null}
         </div>
-        {turn.failureReason ? (
-          <p className="text-[10px] text-rose-300">Failure: {turn.failureReason}</p>
-        ) : null}
       </div>
     </div>
+  );
+}
+
+function Spinner() {
+  return (
+    <span
+      aria-hidden
+      className="inline-block h-3 w-3 animate-spin rounded-full border border-current border-t-transparent"
+    />
   );
 }
