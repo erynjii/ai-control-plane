@@ -59,6 +59,10 @@ function defaultImage(): (req: ImageRequest) => ImageResponse {
 describe("runPipeline", () => {
   it("runs Strategy, then Copy+Photo in parallel, Brand, auto-select, Compliance in order", async () => {
     const callOrder: string[] = [];
+    // Copy and Photo each sleep ~50ms so their execution windows are wide
+    // enough for the overlap assertion below to reliably detect the
+    // difference between Promise.all and sequential awaits.
+    const PARALLEL_DELAY_MS = 50;
     const runtime = stubRuntime({
       chat: chatByAgent({
         strategy: async (req) => {
@@ -67,6 +71,7 @@ describe("runPipeline", () => {
         },
         copy: async (req) => {
           callOrder.push(req.agent);
+          await new Promise((resolve) => setTimeout(resolve, PARALLEL_DELAY_MS));
           return { text: COPY_JSON, model: "gpt-4.1-mini", inputTokens: 200, outputTokens: 120 };
         },
         brand: async (req) => {
@@ -85,6 +90,7 @@ describe("runPipeline", () => {
       }),
       image: async (req) => {
         callOrder.push(req.agent);
+        await new Promise((resolve) => setTimeout(resolve, PARALLEL_DELAY_MS));
         return { imageUrl: "https://cdn.example/int.png", model: "gpt-image-1", costUsd: 0.04 };
       }
     });
@@ -103,6 +109,22 @@ describe("runPipeline", () => {
     expect(photoIdx).toBeGreaterThan(strategyIdx);
     expect(brandIdx).toBeGreaterThan(Math.max(copyIdx, photoIdx));
     expect(complianceIdx).toBeGreaterThan(brandIdx);
+
+    // Execution-window overlap: proves Copy and Photo ran concurrently, not
+    // sequentially. If Promise.all were accidentally replaced with back-to-back
+    // awaits, one of these two inequalities would fail because the windows
+    // would be disjoint. Together they are the Allen-interval "overlaps"
+    // predicate — disjoint ranges violate at least one.
+    const copyLog = ctx.stepLog.find((s) => s.agent === "copy");
+    const photoLog = ctx.stepLog.find((s) => s.agent === "photo");
+    expect(copyLog).toBeDefined();
+    expect(photoLog).toBeDefined();
+    const copyStart = Date.parse(copyLog!.startedAt);
+    const copyEnd = Date.parse(copyLog!.finishedAt);
+    const photoStart = Date.parse(photoLog!.startedAt);
+    const photoEnd = Date.parse(photoLog!.finishedAt);
+    expect(copyStart).toBeLessThan(photoEnd);
+    expect(photoStart).toBeLessThan(copyEnd);
 
     // Final context shape.
     expect(ctx.brief?.audience).toBeTruthy();
