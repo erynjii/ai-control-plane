@@ -29,12 +29,14 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const statusFilter = parseStatus(url.searchParams.get("status"));
   const promotedFilter = parsePromoted(url.searchParams.get("promoted"));
+  const limitRaw = Number.parseInt(url.searchParams.get("limit") ?? "", 10);
+  const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 25;
 
   let query = supabase
     .from("assets")
-    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, created_at, updated_at")
+    .select("id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, created_at, updated_at")
     .order("created_at", { ascending: false })
-    .limit(25);
+    .limit(limit);
 
   if (statusFilter) {
     query = query.eq("status", statusFilter);
