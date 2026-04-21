@@ -15,6 +15,18 @@ export type Asset = {
   risk_level: string;
   scan_findings: ScanFinding[];
   promoted: boolean;
+  conversation_id: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type Conversation = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ConversationWithAssets = Conversation & {
+  assets: Asset[];
 };

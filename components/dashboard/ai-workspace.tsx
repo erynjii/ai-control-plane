@@ -3,7 +3,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { MODEL_MODES, type ModelMode } from "@/lib/ai/model-mapping";
-import type { ScanResult } from "@/lib/scan";
+import type { ScanResult, Severity } from "@/lib/scan";
 import type { Asset } from "@/lib/types";
 import { RiskBadge } from "@/components/dashboard/risk-badge";
 
@@ -42,18 +42,22 @@ const MARKDOWN_COMPONENTS = {
   )
 };
 
-type UserTurn = { id: string; role: "user"; content: string };
+type UserTurn = { id: string; role: "user"; content: string; timestamp: string };
 type AssistantTurn = {
   id: string;
   role: "assistant";
   content: string;
+  timestamp: string;
   assetId: string;
   scan: ScanResult;
   promoted: boolean;
+  status: string;
 };
 type ChatTurn = UserTurn | AssistantTurn;
 
 type AIWorkspaceProps = {
+  conversationId: string | null;
+  onConversationCreated?: (id: string) => void;
   onAssetChanged?: () => void;
 };
 
@@ -64,7 +68,40 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
+function formatTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+function buildTurnsFromAssets(assets: Asset[]): ChatTurn[] {
+  const turns: ChatTurn[] = [];
+  for (const asset of assets) {
+    turns.push({
+      id: `${asset.id}-user`,
+      role: "user",
+      content: asset.prompt,
+      timestamp: asset.created_at
+    });
+    turns.push({
+      id: `${asset.id}-assistant`,
+      role: "assistant",
+      content: asset.output,
+      timestamp: asset.created_at,
+      assetId: asset.id,
+      scan: {
+        riskLevel: (asset.risk_level as Severity) || "low",
+        findings: asset.scan_findings ?? []
+      },
+      promoted: asset.promoted,
+      status: asset.status
+    });
+  }
+  return turns;
+}
+
+export function AIWorkspace({ conversationId: initialConversationId, onConversationCreated, onAssetChanged }: AIWorkspaceProps) {
+  const [conversationId, setConversationId] = useState<string | null>(initialConversationId);
   const [messages, setMessages] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [isPending, setIsPending] = useState(false);
@@ -73,10 +110,43 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
   const [systemPromptOpen, setSystemPromptOpen] = useState(false);
   const [modelMode, setModelMode] = useState<ModelMode>("Auto");
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [promotingId, setPromotingId] = useState<string | null>(null);
-  const [promoteError, setPromoteError] = useState<string | null>(null);
+  const [pendingActionId, setPendingActionId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [isHydrating, setIsHydrating] = useState(Boolean(initialConversationId));
 
   const threadRef = useRef<HTMLDivElement>(null);
+
+  // Hydrate thread from an existing conversation.
+  useEffect(() => {
+    let cancelled = false;
+    if (!initialConversationId) {
+      setIsHydrating(false);
+      return;
+    }
+    setIsHydrating(true);
+    (async () => {
+      try {
+        const response = await fetch(`/api/conversations/${initialConversationId}`);
+        if (!response.ok || cancelled) return;
+        const payload = (await response.json().catch(() => null)) as
+          | { assets?: Asset[] }
+          | null;
+        if (cancelled) return;
+        const assets = payload?.assets ?? [];
+        setMessages(buildTurnsFromAssets(assets));
+        // If the loaded conversation has assets, pick up its system prompt from the first one.
+        const firstSystemPrompt = assets[0]?.system_prompt;
+        if (firstSystemPrompt) setSystemPrompt(firstSystemPrompt);
+      } catch {
+        // Ignore; thread stays empty.
+      } finally {
+        if (!cancelled) setIsHydrating(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [initialConversationId]);
 
   useEffect(() => {
     const el = threadRef.current;
@@ -88,14 +158,19 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
     const trimmed = input.trim();
     if (!trimmed || isPending) return;
 
-    const userTurn: UserTurn = { id: newId(), role: "user", content: trimmed };
+    const userTurn: UserTurn = {
+      id: newId(),
+      role: "user",
+      content: trimmed,
+      timestamp: new Date().toISOString()
+    };
     const nextMessages: ChatTurn[] = [...messages, userTurn];
 
     setMessages(nextMessages);
     setInput("");
     setIsPending(true);
     setError(null);
-    setPromoteError(null);
+    setActionError(null);
 
     const apiMessages = nextMessages.map(({ role, content }) => ({ role, content }));
 
@@ -106,12 +181,13 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
         body: JSON.stringify({
           messages: apiMessages,
           systemPrompt: systemPrompt.trim() || DEFAULT_SYSTEM_PROMPT,
-          modelMode
+          modelMode,
+          conversationId: conversationId ?? undefined
         })
       });
 
       const payload = (await response.json().catch(() => null)) as
-        | { output?: string; asset?: Asset; scan?: ScanResult; error?: string }
+        | { output?: string; asset?: Asset; scan?: ScanResult; conversationId?: string; error?: string }
         | null;
 
       if (!response.ok || !payload?.output || !payload.asset || !payload.scan) {
@@ -123,11 +199,18 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
         id: newId(),
         role: "assistant",
         content: payload.output,
+        timestamp: payload.asset.created_at,
         assetId: payload.asset.id,
         scan: payload.scan,
-        promoted: payload.asset.promoted
+        promoted: payload.asset.promoted,
+        status: payload.asset.status
       };
       setMessages((current) => [...current, assistantTurn]);
+
+      if (payload.conversationId && payload.conversationId !== conversationId) {
+        setConversationId(payload.conversationId);
+        onConversationCreated?.(payload.conversationId);
+      }
       onAssetChanged?.();
     } catch {
       setError("Network error. Please try again.");
@@ -160,44 +243,54 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
     }
   };
 
-  const handlePromote = async (turnId: string, assetId: string) => {
-    setPromotingId(turnId);
-    setPromoteError(null);
-
+  const patchAsset = async (
+    turnId: string,
+    assetId: string,
+    body: { promoted?: boolean; status?: string }
+  ) => {
+    setPendingActionId(turnId);
+    setActionError(null);
     try {
       const response = await fetch(`/api/assets/${assetId}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ promoted: true, status: "pending_review" })
+        body: JSON.stringify(body)
       });
       const payload = (await response.json().catch(() => null)) as
         | { asset?: Asset; error?: string }
         | null;
-
       if (!response.ok || !payload?.asset) {
-        setPromoteError(payload?.error ?? "Failed to save as asset.");
+        setActionError(payload?.error ?? "Action failed.");
         return;
       }
-
+      const updated = payload.asset;
       setMessages((current) =>
-        current.map((turn) => (turn.id === turnId && turn.role === "assistant" ? { ...turn, promoted: true } : turn))
+        current.map((turn) =>
+          turn.id === turnId && turn.role === "assistant"
+            ? { ...turn, promoted: updated.promoted, status: updated.status }
+            : turn
+        )
       );
       onAssetChanged?.();
     } catch {
-      setPromoteError("Network error. Please try again.");
+      setActionError("Network error. Please try again.");
     } finally {
-      setPromotingId(null);
+      setPendingActionId(null);
     }
   };
+
+  const handleSaveAsAsset = (turnId: string, assetId: string) => patchAsset(turnId, assetId, { promoted: true });
+  const handleSendToApproval = (turnId: string, assetId: string) =>
+    patchAsset(turnId, assetId, { promoted: true, status: "pending_review" });
 
   const isSystemPromptCustom = systemPrompt.trim() && systemPrompt.trim() !== DEFAULT_SYSTEM_PROMPT;
 
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:p-5">
+    <section className="flex h-full flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/70 p-4 md:p-5">
       <div>
         <h2 className="text-lg font-semibold text-slate-100">AI Workspace</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Iterate in chat. Save responses that matter as assets to route them through review.
+          Iterate in chat. Save responses that matter, or send them straight to approval.
         </p>
       </div>
 
@@ -221,7 +314,6 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
         {systemPromptOpen ? (
           <div className="border-t border-slate-800 px-3 py-2">
             <textarea
-              id="system-prompt"
               value={systemPrompt}
               onChange={(event) => setSystemPrompt(event.target.value)}
               disabled={isPending}
@@ -245,54 +337,30 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
 
       <div
         ref={threadRef}
-        className="flex h-[28rem] flex-col gap-3 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-3"
+        className="flex min-h-[20rem] flex-1 flex-col gap-4 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/50 p-3"
         aria-live="polite"
       >
-        {messages.length === 0 && !isPending ? (
+        {isHydrating ? (
+          <p className="m-auto text-sm text-slate-500">Loading conversation...</p>
+        ) : messages.length === 0 && !isPending ? (
           <p className="m-auto text-sm text-slate-500">Start the conversation below.</p>
         ) : null}
 
-        {messages.map((turn) =>
-          turn.role === "user" ? (
-            <div key={turn.id} className="flex justify-end">
-              <div className="max-w-[80%] whitespace-pre-wrap rounded-lg bg-cyan-500/15 px-3 py-2 text-sm text-cyan-100">
-                {turn.content}
-              </div>
-            </div>
-          ) : (
-            <div key={turn.id} className="flex flex-col gap-1.5">
-              <div className="max-w-[90%] rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
-                <ReactMarkdown components={MARKDOWN_COMPONENTS}>{turn.content}</ReactMarkdown>
-              </div>
-              <div className="flex items-center gap-2 pl-1 text-xs">
-                <RiskBadge risk={turn.scan.riskLevel} />
-                <button
-                  type="button"
-                  onClick={() => handleCopy(turn.id, turn.content)}
-                  className="text-slate-400 hover:text-slate-200"
-                >
-                  {copiedId === turn.id ? "Copied" : "Copy"}
-                </button>
-                <span className="text-slate-700">·</span>
-                <button
-                  type="button"
-                  onClick={() => handlePromote(turn.id, turn.assetId)}
-                  disabled={turn.promoted || promotingId === turn.id}
-                  className={`transition ${
-                    turn.promoted
-                      ? "text-emerald-300"
-                      : "text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
-                  }`}
-                >
-                  {turn.promoted ? "Saved as asset" : promotingId === turn.id ? "Saving..." : "Save as Asset"}
-                </button>
-              </div>
-            </div>
-          )
-        )}
+        {messages.map((turn) => (turn.role === "user" ? <UserBubble key={turn.id} turn={turn} /> : (
+          <AssistantBubble
+            key={turn.id}
+            turn={turn}
+            copied={copiedId === turn.id}
+            pending={pendingActionId === turn.id}
+            onCopy={() => handleCopy(turn.id, turn.content)}
+            onSaveAsAsset={() => handleSaveAsAsset(turn.id, turn.assetId)}
+            onSendToApproval={() => handleSendToApproval(turn.id, turn.assetId)}
+          />
+        )))}
 
         {isPending ? (
-          <div className="flex justify-start">
+          <div className="flex items-start gap-2">
+            <Avatar role="assistant" />
             <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-400">
               Thinking...
             </div>
@@ -306,9 +374,9 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
         ) : null}
       </div>
 
-      {promoteError ? (
+      {actionError ? (
         <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
-          {promoteError}
+          {actionError}
         </p>
       ) : null}
 
@@ -349,5 +417,94 @@ export function AIWorkspace({ onAssetChanged }: AIWorkspaceProps = {}) {
         </div>
       </form>
     </section>
+  );
+}
+
+function Avatar({ role }: { role: "user" | "assistant" }) {
+  return role === "user" ? (
+    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-cyan-500/20 text-[11px] font-semibold text-cyan-200">
+      You
+    </div>
+  ) : (
+    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-700 bg-slate-950 text-[11px] font-semibold text-slate-300">
+      AI
+    </div>
+  );
+}
+
+function UserBubble({ turn }: { turn: UserTurn }) {
+  return (
+    <div className="flex flex-row-reverse items-start gap-2">
+      <Avatar role="user" />
+      <div className="flex max-w-[80%] flex-col items-end gap-1">
+        <div className="whitespace-pre-wrap rounded-lg bg-cyan-500/15 px-3 py-2 text-sm text-cyan-100">
+          {turn.content}
+        </div>
+        <span className="text-[10px] text-slate-500">{formatTime(turn.timestamp)}</span>
+      </div>
+    </div>
+  );
+}
+
+type AssistantBubbleProps = {
+  turn: AssistantTurn;
+  copied: boolean;
+  pending: boolean;
+  onCopy: () => void;
+  onSaveAsAsset: () => void;
+  onSendToApproval: () => void;
+};
+
+function AssistantBubble({ turn, copied, pending, onCopy, onSaveAsAsset, onSendToApproval }: AssistantBubbleProps) {
+  const inReview = turn.status === "pending_review";
+  const decided = turn.status === "approved" || turn.status === "rejected";
+
+  let statusLabel: string | null = null;
+  if (turn.status === "pending_review") statusLabel = "In review";
+  else if (turn.status === "approved") statusLabel = "Approved";
+  else if (turn.status === "rejected") statusLabel = "Rejected";
+
+  return (
+    <div className="flex items-start gap-2">
+      <Avatar role="assistant" />
+      <div className="flex max-w-[90%] flex-col gap-1">
+        <div className="rounded-lg border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100">
+          <ReactMarkdown components={MARKDOWN_COMPONENTS}>{turn.content}</ReactMarkdown>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs">
+          <span className="text-[10px] text-slate-500">{formatTime(turn.timestamp)}</span>
+          <RiskBadge risk={turn.scan.riskLevel} />
+          <button type="button" onClick={onCopy} className="text-slate-400 hover:text-slate-200">
+            {copied ? "Copied" : "Copy"}
+          </button>
+          <span className="text-slate-700">·</span>
+          {turn.promoted ? (
+            <span className="text-emerald-300">Saved</span>
+          ) : (
+            <button
+              type="button"
+              onClick={onSaveAsAsset}
+              disabled={pending}
+              className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {pending ? "Saving..." : "Save as Asset"}
+            </button>
+          )}
+          <span className="text-slate-700">·</span>
+          {statusLabel ? (
+            <span className={decided ? "text-slate-300" : "text-amber-300"}>{statusLabel}</span>
+          ) : (
+            <button
+              type="button"
+              onClick={onSendToApproval}
+              disabled={pending || inReview}
+              className="text-cyan-300 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {pending ? "Sending..." : "Send to Approval"}
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
