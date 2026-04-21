@@ -7,9 +7,11 @@ import { getCurrentUser, signOut } from "@/lib/supabase/auth";
 import { AIWorkspace } from "@/components/dashboard/ai-workspace";
 import { ActivityTimeline } from "@/components/dashboard/activity-timeline";
 import { ApprovalQueue } from "@/components/dashboard/approval-queue";
+import { ApprovalsView } from "@/components/dashboard/approvals-view";
 import { ConnectedAccounts } from "@/components/dashboard/connected-accounts";
 import { InsightsCard } from "@/components/dashboard/insights-card";
 import { LeftRail, type NavKey } from "@/components/dashboard/left-rail";
+import type { Asset } from "@/lib/types";
 
 type DashboardState = {
   loading: boolean;
@@ -19,7 +21,7 @@ type DashboardState = {
 
 const NAV_SCROLL_TARGETS: Record<NavKey, string | null> = {
   workspace: "workspace-anchor",
-  approvals: "approvals-card",
+  approvals: null,
   assets: "approvals-card",
   audit: "activity-card",
   insights: "insights-card",
@@ -119,6 +121,13 @@ export default function DashboardPage() {
     }
   };
 
+  const handleOpenApprovalAsset = (asset: Asset) => {
+    if (asset.conversation_id) {
+      setActiveConversationId(asset.conversation_id);
+    }
+    setActiveNav("workspace");
+  };
+
   const handleApprovalsCount = useCallback((count: number) => {
     setApprovalsCount(count);
   }, []);
@@ -165,12 +174,20 @@ export default function DashboardPage() {
           <p className="text-sm font-semibold text-ink-100">AI Control Plane</p>
         </div>
         <div className="flex-1 px-6 py-6">
-          <AIWorkspace
-            key={activeConversationId ?? "new"}
-            conversationId={activeConversationId}
-            onConversationCreated={handleConversationCreated}
-            onAssetChanged={bumpAssets}
-          />
+          {activeNav === "approvals" ? (
+            <ApprovalsView
+              refreshKey={assetRefreshKey}
+              onAction={bumpAssets}
+              onOpenAsset={handleOpenApprovalAsset}
+            />
+          ) : (
+            <AIWorkspace
+              key={activeConversationId ?? "new"}
+              conversationId={activeConversationId}
+              onConversationCreated={handleConversationCreated}
+              onAssetChanged={bumpAssets}
+            />
+          )}
         </div>
       </main>
 
@@ -182,7 +199,9 @@ export default function DashboardPage() {
           <ApprovalQueue
             refreshKey={assetRefreshKey}
             onAction={bumpAssets}
+            onSelectAsset={handleOpenApprovalAsset}
             onCountChange={handleApprovalsCount}
+            onViewAll={() => handleSelectNav("approvals")}
           />
         </div>
         <div id="activity-card">
