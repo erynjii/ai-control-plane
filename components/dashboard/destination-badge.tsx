@@ -16,6 +16,20 @@ const PUBLISH_STATUS_STYLES: Record<DestinationStatus, string> = {
   failed: "border-rose-500/40 bg-rose-500/10 text-rose-200"
 };
 
+const ASSET_STATUS_STYLES: Record<string, string> = {
+  draft: "border-slate-700 bg-slate-800 text-slate-300",
+  pending_review: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+  approved: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  rejected: "border-rose-500/40 bg-rose-500/10 text-rose-200",
+  queued: "border-amber-500/40 bg-amber-500/10 text-amber-200",
+  published: "border-emerald-500/40 bg-emerald-500/10 text-emerald-200",
+  failed: "border-rose-500/40 bg-rose-500/10 text-rose-200"
+};
+
+const ASSET_STATUS_LABELS: Record<string, string> = {
+  pending_review: "PENDING REVIEW"
+};
+
 export function DestinationBadge({ destination }: { destination: Destination }) {
   return (
     <span
@@ -27,12 +41,25 @@ export function DestinationBadge({ destination }: { destination: Destination }) 
 }
 
 export function PublishStatusBadge({ status }: { status: DestinationStatus }) {
-  if (status === "idle") return null;
+  if (status === "idle" || status === "assigned") return null;
   return (
     <span
       className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide ${PUBLISH_STATUS_STYLES[status]}`}
     >
-      {status}
+      {status === "publishing" ? "Publishing…" : status}
+    </span>
+  );
+}
+
+export function StatusBadge({ status }: { status: string }) {
+  const classes =
+    ASSET_STATUS_STYLES[status] ?? "border-slate-700 bg-slate-800 text-slate-300";
+  const label = ASSET_STATUS_LABELS[status] ?? status;
+  return (
+    <span
+      className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] uppercase tracking-wide ${classes}`}
+    >
+      {label}
     </span>
   );
 }

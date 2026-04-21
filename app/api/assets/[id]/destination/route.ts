@@ -2,9 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { DESTINATIONS, getAdapter } from "@/lib/integrations";
-
-const ASSET_SELECT =
-  "id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, destination, destination_status, destination_meta, published_at, failure_reason, created_at, updated_at";
+import { ASSET_SELECT } from "@/lib/assets/select";
 
 const REASSIGNABLE_STATUSES = new Set(["idle", "assigned", "failed"]);
 

@@ -13,6 +13,8 @@ export const ASSET_STATUSES = [
 
 export type AssetStatus = (typeof ASSET_STATUSES)[number];
 
+export type MediaType = "image" | "video";
+
 export type Asset = {
   id: string;
   workspace_id: string;
@@ -30,6 +32,9 @@ export type Asset = {
   destination_meta: Record<string, unknown>;
   published_at: string | null;
   failure_reason: string | null;
+  media_url: string | null;
+  media_type: MediaType | null;
+  media_prompt: string | null;
   created_at: string;
   updated_at: string;
 };

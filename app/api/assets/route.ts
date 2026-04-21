@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { ASSET_STATUSES, type AssetStatus } from "@/lib/types";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { DESTINATIONS, DESTINATION_STATUSES, type Destination, type DestinationStatus } from "@/lib/integrations/types";
+import { ASSET_SELECT } from "@/lib/assets/select";
 
 function parseStatus(value: string | null): AssetStatus | null {
   if (!value) return null;
@@ -47,9 +48,7 @@ export async function GET(request: Request) {
 
   let query = supabase
     .from("assets")
-    .select(
-      "id, workspace_id, prompt, system_prompt, output, model, status, risk_level, scan_findings, promoted, conversation_id, destination, destination_status, destination_meta, published_at, failure_reason, created_at, updated_at"
-    )
+    .select(ASSET_SELECT)
     .order("created_at", { ascending: false })
     .limit(limit);
 
