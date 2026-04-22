@@ -11,16 +11,19 @@ import type {
 } from "@/lib/agents/types";
 import type { PipelineTimelineEvent } from "./timeline-types";
 
-type PipelineRunResponse = {
-  pipelineRun?: {
-    asset_id: string;
-    total_cost_usd: number | string;
-    duration_ms: number;
-    max_flag_severity: string | null;
-    context: PipelineContext;
-    model_versions: Record<string, string>;
-    created_at: string;
-  };
+type PipelineRunRow = {
+  id: string;
+  asset_id: string;
+  total_cost_usd: number | string;
+  duration_ms: number;
+  max_flag_severity: string | null;
+  context: PipelineContext;
+  model_versions: Record<string, string>;
+  created_at: string;
+};
+
+type PipelineRunsResponse = {
+  pipelineRuns?: PipelineRunRow[];
   error?: string;
 };
 
@@ -53,7 +56,7 @@ type DrawerProps = {
 
 export function AgentOutputDrawer({ event, onClose }: DrawerProps) {
   const [status, setStatus] = useState<"idle" | "loading" | "success" | "error">("idle");
-  const [run, setRun] = useState<PipelineRunResponse["pipelineRun"] | null>(null);
+  const [run, setRun] = useState<PipelineRunRow | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
 
   // Escape closes the drawer.
@@ -66,7 +69,10 @@ export function AgentOutputDrawer({ event, onClose }: DrawerProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [event, onClose]);
 
-  // Fetch the full run whenever a new event is selected.
+  // Fetch the full run whenever a new event is selected. When the event
+  // carries a runId we narrow the query to that specific run; otherwise we
+  // fall back to the newest run for the asset (same asset_id, one row —
+  // matches pre-1:N behavior).
   useEffect(() => {
     if (!event) return;
     let cancelled = false;
@@ -75,16 +81,21 @@ export function AgentOutputDrawer({ event, onClose }: DrawerProps) {
     setDetailsOpen(false);
     (async () => {
       try {
-        const res = await fetch(`/api/pipeline-runs?asset_id=${encodeURIComponent(event.assetId)}`);
+        const params = new URLSearchParams({ asset_id: event.assetId });
+        const runId = event.payload.runId;
+        if (runId) params.set("run_id", runId);
+        const res = await fetch(`/api/pipeline-runs?${params.toString()}`);
         if (cancelled) return;
         if (!res.ok) {
           setStatus("error");
           return;
         }
-        const payload = (await res.json()) as PipelineRunResponse;
+        const payload = (await res.json()) as PipelineRunsResponse;
         if (cancelled) return;
-        setRun(payload.pipelineRun ?? null);
-        setStatus(payload.pipelineRun ? "success" : "error");
+        // Response is ordered desc → first entry is the newest / the matched run.
+        const picked = payload.pipelineRuns?.[0] ?? null;
+        setRun(picked);
+        setStatus(picked ? "success" : "error");
       } catch {
         if (!cancelled) setStatus("error");
       }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildGenerationLabel,
   buildTimelineView,
   classifyAuditEvent,
   isLifecycleAction,
@@ -169,6 +170,9 @@ describe("buildTimelineView", () => {
       "pipeline.compliance_checked"
     ]);
     expect(group.totalCostUsd).toBeCloseTo(0.1, 6);
+    // No runId on these events → groupKey falls back to assetId, runId is null.
+    expect(group.groupKey).toBe("asset_A");
+    expect(group.runId).toBeNull();
     expect(view.lifecycle.map((e) => e.action)).toEqual(["publish_succeeded", "queued"]);
   });
 
@@ -187,4 +191,153 @@ describe("buildTimelineView", () => {
     expect(view.pipelineGroups).toEqual([]);
     expect(view.lifecycle).toEqual([]);
   });
+
+  it("groups by runId when events carry it, producing one group per run for the same asset", () => {
+    // Two runs for asset_X: run_1 (all 5 agents) and run_2 (copy regen).
+    const baseMeta = (agent: string, runId: string, summary = "ok") => ({
+      agent,
+      durationMs: 100,
+      model: "gpt-4.1-mini",
+      costUsd: 0.01,
+      summary,
+      runId
+    });
+    const events: AuditEvent[] = [
+      event({
+        id: "r2-compl",
+        asset_id: "asset_X",
+        action: "pipeline.compliance_checked",
+        created_at: "2026-04-22T00:10:03.000Z",
+        metadata: baseMeta("compliance", "run_2")
+      }),
+      event({
+        id: "r2-brand",
+        asset_id: "asset_X",
+        action: "pipeline.brand_reviewed",
+        created_at: "2026-04-22T00:10:02.000Z",
+        metadata: baseMeta("brand", "run_2")
+      }),
+      event({
+        id: "r2-copy",
+        asset_id: "asset_X",
+        action: "pipeline.copy_drafted",
+        created_at: "2026-04-22T00:10:01.000Z",
+        metadata: baseMeta("copy", "run_2")
+      }),
+      event({
+        id: "r1-compl",
+        asset_id: "asset_X",
+        action: "pipeline.compliance_checked",
+        created_at: "2026-04-22T00:00:05.000Z",
+        metadata: baseMeta("compliance", "run_1")
+      }),
+      event({
+        id: "r1-brand",
+        asset_id: "asset_X",
+        action: "pipeline.brand_reviewed",
+        created_at: "2026-04-22T00:00:04.000Z",
+        metadata: baseMeta("brand", "run_1")
+      }),
+      event({
+        id: "r1-photo",
+        asset_id: "asset_X",
+        action: "pipeline.image_generated",
+        created_at: "2026-04-22T00:00:03.000Z",
+        metadata: baseMeta("photo", "run_1")
+      }),
+      event({
+        id: "r1-copy",
+        asset_id: "asset_X",
+        action: "pipeline.copy_drafted",
+        created_at: "2026-04-22T00:00:02.000Z",
+        metadata: baseMeta("copy", "run_1")
+      }),
+      event({
+        id: "r1-strat",
+        asset_id: "asset_X",
+        action: "pipeline.strategy_drafted",
+        created_at: "2026-04-22T00:00:01.000Z",
+        metadata: baseMeta("strategy", "run_1")
+      })
+    ];
+
+    const view = buildTimelineView(events);
+    expect(view.pipelineGroups).toHaveLength(2);
+
+    // Newest run appears first.
+    expect(view.pipelineGroups[0].runId).toBe("run_2");
+    expect(view.pipelineGroups[0].label).toBe("Regenerated caption");
+    expect(view.pipelineGroups[1].runId).toBe("run_1");
+    expect(view.pipelineGroups[1].label).toBe("Initial generation");
+
+    // Each group carries its asset id.
+    expect(view.pipelineGroups[0].assetId).toBe("asset_X");
+    expect(view.pipelineGroups[1].assetId).toBe("asset_X");
+  });
 });
+
+describe("buildGenerationLabel", () => {
+  function mkEvent(agent: string, action: string): PipelineTimelineEventForTest {
+    return {
+      kind: "pipeline",
+      id: `evt_${agent}`,
+      assetId: "asset_X",
+      action: action as never,
+      createdAt: "2026-04-22T00:00:00.000Z",
+      payload: {
+        agent: agent as never,
+        durationMs: 100,
+        model: "gpt-4.1-mini",
+        costUsd: 0.01,
+        summary: "ok"
+      }
+    };
+  }
+
+  it("returns 'Initial generation' when all five core agents are present", () => {
+    const events = [
+      mkEvent("strategy", "pipeline.strategy_drafted"),
+      mkEvent("copy", "pipeline.copy_drafted"),
+      mkEvent("photo", "pipeline.image_generated"),
+      mkEvent("brand", "pipeline.brand_reviewed"),
+      mkEvent("compliance", "pipeline.compliance_checked")
+    ];
+    expect(buildGenerationLabel(events)).toBe("Initial generation");
+  });
+
+  it("returns 'Regenerated caption' when copy ran but photo did not (isolate=true from copy)", () => {
+    const events = [
+      mkEvent("copy", "pipeline.copy_drafted"),
+      mkEvent("brand", "pipeline.brand_reviewed"),
+      mkEvent("compliance", "pipeline.compliance_checked")
+    ];
+    expect(buildGenerationLabel(events)).toBe("Regenerated caption");
+  });
+
+  it("returns 'Regenerated image' when photo ran but copy/brand did not (isolate=true from photo)", () => {
+    const events = [
+      mkEvent("photo", "pipeline.image_generated"),
+      mkEvent("compliance", "pipeline.compliance_checked")
+    ];
+    expect(buildGenerationLabel(events)).toBe("Regenerated image");
+  });
+
+  it("returns 'Brief adjusted' when a strategy override event is present", () => {
+    const events = [
+      mkEvent("strategy", "pipeline.strategy_overridden"),
+      mkEvent("copy", "pipeline.copy_drafted"),
+      mkEvent("photo", "pipeline.image_generated"),
+      mkEvent("brand", "pipeline.brand_reviewed"),
+      mkEvent("compliance", "pipeline.compliance_checked")
+    ];
+    expect(buildGenerationLabel(events)).toBe("Brief adjusted");
+  });
+
+  it("falls back to 'Regeneration' for unrecognised combinations", () => {
+    const events = [mkEvent("brand", "pipeline.brand_reviewed")];
+    expect(buildGenerationLabel(events)).toBe("Regeneration");
+  });
+});
+
+// Local alias so the label test doesn't have to replicate the export union.
+type PipelineTimelineEventForTest = import("./timeline-types").PipelineTimelineEvent;

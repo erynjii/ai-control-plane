@@ -165,10 +165,10 @@ export function ActivityTimeline({ refreshKey = 0 }: ActivityTimelineProps) {
         <div className="mb-3 space-y-3">
           {view.pipelineGroups.map((group) => (
             <PipelineGroupBlock
-              key={group.assetId}
+              key={group.groupKey}
               group={group}
-              collapsed={collapsedGroups[group.assetId] ?? false}
-              onToggle={() => toggleGroup(group.assetId)}
+              collapsed={collapsedGroups[group.groupKey] ?? false}
+              onToggle={() => toggleGroup(group.groupKey)}
               onOpenEvent={(event) => setDrawerEvent(event)}
             />
           ))}
@@ -207,7 +207,7 @@ function PipelineGroupBlock({
         <span className="flex items-center gap-2">
           <Chevron className="h-3.5 w-3.5 text-ink-400" />
           <span className="text-xs font-semibold uppercase tracking-[0.12em] text-ink-400">
-            Generation
+            {group.label}
           </span>
           <span className="text-[10px] text-ink-500">
             {group.events.length} step{group.events.length === 1 ? "" : "s"}
