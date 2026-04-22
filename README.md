@@ -12,6 +12,23 @@ Tests are colocated with source (e.g. `lib/agents/strategy.ts` is exercised
 by `lib/agents/strategy.test.ts`). Vitest is configured in
 `vitest.config.ts`.
 
+### Test environment per file extension
+
+`vitest.config.ts` uses `environmentMatchGlobs` to pick the test env from
+the file extension:
+
+- `*.test.ts`  → `node` (no DOM, fast). Use for pure logic.
+- `*.test.tsx` → `jsdom`. Use for React components rendered with
+  `@testing-library/react`.
+
+The default env stays `node`, so anything outside the include glob is not
+forced into a browser. `vitest.setup.ts` registers
+`@testing-library/jest-dom` matchers (`toBeInTheDocument`, etc.) globally;
+node-env tests don't use them and pay no runtime cost.
+
+`environmentMatchGlobs` is deprecated in Vitest v3 (replaced by the
+`projects` API). Update when the repo bumps to v3.
+
 ## Running the v2 agent pipeline (experimental)
 
 `/api/generate-post` has two code paths:
