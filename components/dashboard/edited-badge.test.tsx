@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { EditedBadge } from "./edited-badge";
 
 describe("EditedBadge", () => {
@@ -21,5 +21,18 @@ describe("EditedBadge", () => {
   it("renders 'edited ×N' when count > 1", () => {
     render(<EditedBadge count={3} />);
     expect(screen.getByText(/edited ×3/)).toBeInTheDocument();
+  });
+
+  it("without onClick renders as a plain span (non-interactive)", () => {
+    render(<EditedBadge count={2} />);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("with onClick renders as a button and invokes the handler on click", () => {
+    const onClick = vi.fn();
+    render(<EditedBadge count={2} onClick={onClick} />);
+    const button = screen.getByRole("button", { name: /view diff/i });
+    fireEvent.click(button);
+    expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
