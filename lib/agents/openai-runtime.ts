@@ -5,8 +5,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AgentRuntime, ChatRequest, ChatResponse, ImageRequest, ImageResponse } from "@/lib/agents/runtime";
 import { imageCost } from "@/lib/agents/pricing";
+import { fetchBrandEditsForWorkspace } from "@/lib/agents/brand-feedback";
 import { generateImageWithOpenAI } from "@/lib/ai/image";
 import { buildMediaPath, uploadMediaObject } from "@/lib/media/storage";
+import type { BrandEditHistoryEntry } from "@/lib/types";
 
 interface OpenAIChatPayload {
   choices?: Array<{ message?: { content?: string } }>;
@@ -58,6 +60,10 @@ export function createOpenAIRuntime(options: OpenAIRuntimeOptions): AgentRuntime
     };
   }
 
+  async function fetchBrandEdits(workspaceId: string): Promise<BrandEditHistoryEntry[]> {
+    return fetchBrandEditsForWorkspace(options.supabase, workspaceId);
+  }
+
   async function image(req: ImageRequest): Promise<ImageResponse> {
     const generated = await generateImageWithOpenAI({
       apiKey: options.apiKey,
@@ -78,5 +84,5 @@ export function createOpenAIRuntime(options: OpenAIRuntimeOptions): AgentRuntime
     };
   }
 
-  return { chat, image };
+  return { chat, image, fetchBrandEdits };
 }

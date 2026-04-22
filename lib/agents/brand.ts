@@ -4,7 +4,15 @@
 // on a re-run (runFromAgent in PR 3). Keeping responsibilities split keeps
 // auditability clean — the variant text you see on the approval card is
 // exactly what Copy produced.
+//
+// Feedback loop (PR 4): when BRAND_FEEDBACK_WORKSPACES includes this
+// workspace AND runtime.fetchBrandEdits is wired, Brand pulls the last
+// 20 manager_edits via the runtime and appends them to the system prompt.
+// Runtime hook is optional so test runtimes stay minimal. Flag check is
+// per-workspace; any miss short-circuits back to the base prompt.
 
+import { isBrandFeedbackEnabled } from "@/lib/flags";
+import { buildBrandSystemPrompt, logBrandPrompt } from "@/lib/agents/brand-prompt";
 import { costFor } from "@/lib/agents/pricing";
 import { executeStep } from "@/lib/agents/step";
 import type { AgentRuntime } from "@/lib/agents/runtime";
@@ -12,21 +20,24 @@ import type {
   AgentFlag,
   CaptionVariant,
   FlagSeverity,
-  PipelineContext,
-  StrategyBrief
+  PipelineContext
 } from "@/lib/agents/types";
+import type { BrandEditHistoryEntry } from "@/lib/types";
 
 const BRAND_MODEL = "gpt-4.1-mini";
 
-function buildSystemPrompt(brief: StrategyBrief): string {
-  return `You are a brand editor scoring social-media caption variants.
-Brand tone: ${brief.tone}
-Audience: ${brief.audience}
-Content pillar: ${brief.contentPillar}
-Scoring rubric (0–100): voice fit, clarity, CTA strength, brand safety.
-Emit flags for material issues; severities: "blocker", "warning", "note".
-Do NOT rewrite. Return ONLY JSON:
-{ "reviews": [ { "variantId": string, "score": number, "flags": [ { "severity": "blocker"|"warning"|"note", "code": string, "message": string, "suggestion": string? } ] } ] }`;
+async function collectEditHistory(
+  ctx: PipelineContext,
+  runtime: AgentRuntime
+): Promise<BrandEditHistoryEntry[]> {
+  if (!isBrandFeedbackEnabled(ctx.workspaceId)) return [];
+  if (!runtime.fetchBrandEdits) return [];
+  try {
+    return await runtime.fetchBrandEdits(ctx.workspaceId);
+  } catch {
+    // Non-fatal: Brand runs with the base prompt if the fetch fails.
+    return [];
+  }
 }
 
 interface RawFlag {
@@ -120,13 +131,20 @@ export async function runBrand(
     run: async () => {
       const brief = ctx.brief!;
       const variants = ctx.variants!;
+      const editHistory = await collectEditHistory(ctx, runtime);
+      const systemPrompt = buildBrandSystemPrompt(brief, editHistory);
+      logBrandPrompt({
+        workspaceId: ctx.workspaceId,
+        prompt: systemPrompt,
+        editCount: editHistory.length
+      });
       const payload = JSON.stringify({
         variants: variants.map((v) => ({ id: v.id, text: v.text, hashtags: v.hashtags }))
       });
       const response = await runtime.chat({
         agent: "brand",
         model: BRAND_MODEL,
-        system: buildSystemPrompt(brief),
+        system: systemPrompt,
         user: payload,
         jsonSchemaHint: "brand_reviews",
         temperature: 0.2

@@ -11,17 +11,22 @@ import type {
   ImageResponse
 } from "@/lib/agents/runtime";
 import type { PipelineContext, PipelineInit } from "@/lib/agents/types";
+import type { BrandEditHistoryEntry } from "@/lib/types";
 
 export type ChatStub = (req: ChatRequest) => ChatResponse | Promise<ChatResponse>;
 export type ImageStub = (req: ImageRequest) => ImageResponse | Promise<ImageResponse>;
+export type FetchBrandEditsStub = (
+  workspaceId: string
+) => BrandEditHistoryEntry[] | Promise<BrandEditHistoryEntry[]>;
 
 export interface StubRuntimeOptions {
   chat?: ChatStub;
   image?: ImageStub;
+  fetchBrandEdits?: FetchBrandEditsStub;
 }
 
 export function stubRuntime(options: StubRuntimeOptions = {}): AgentRuntime {
-  return {
+  const runtime: AgentRuntime = {
     async chat(req) {
       if (!options.chat) throw new Error("chat stub not provided");
       return options.chat(req);
@@ -31,6 +36,12 @@ export function stubRuntime(options: StubRuntimeOptions = {}): AgentRuntime {
       return options.image(req);
     }
   };
+  if (options.fetchBrandEdits) {
+    runtime.fetchBrandEdits = async (workspaceId) => {
+      return options.fetchBrandEdits!(workspaceId);
+    };
+  }
+  return runtime;
 }
 
 export function baseContext(overrides: Partial<PipelineInit> = {}): PipelineContext {

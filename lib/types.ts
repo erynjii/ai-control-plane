@@ -59,6 +59,14 @@ export type ManagerEdit = {
   edited_at: string;
 };
 
+/** Compact edit record passed to the Brand agent as feedback-loop input.
+ *  Mirrors ManagerEdit but drops ids/timestamps the prompt doesn't use. */
+export type BrandEditHistoryEntry = {
+  field: ManagerEditField;
+  before: string;
+  after: string;
+};
+
 export type Conversation = {
   id: string;
   title: string;

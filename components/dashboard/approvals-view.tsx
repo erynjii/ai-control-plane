@@ -8,6 +8,7 @@ import { ApprovalCardBrief } from "./approval-card-brief";
 import { ApprovalCardPill } from "./approval-card-pill";
 import { PartialRegenerateMenu } from "./partial-regenerate-menu";
 import { EditedBadge } from "./edited-badge";
+import { EditDiffViewer } from "./edit-diff-viewer";
 import { DestinationBadge, StatusBadge } from "./destination-badge";
 import { clearApprovalCardCache, useApprovalCardData } from "./use-approval-card-data";
 
@@ -126,6 +127,9 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
   // card's useApprovalCardData re-fetches. Multiplied with the external
   // refreshKey so parent-driven refresh still busts the cache.
   const [localRefresh, setLocalRefresh] = useState(0);
+  // The drawer is single-open; keeping its state at this level means we
+  // don't pay the fetch cost per-card and the close path is one callback.
+  const [diffAssetId, setDiffAssetId] = useState<string | null>(null);
 
   const loadCounts = useCallback(async () => {
     try {
@@ -303,10 +307,13 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
             onApprove={() => transition(asset.id, "approved")}
             onReject={() => transition(asset.id, "rejected")}
             onOpen={onOpenAsset ? () => onOpenAsset(asset) : undefined}
+            onOpenEdits={() => setDiffAssetId(asset.id)}
             onRegenerated={handleRegenerated}
           />
         ))}
       </ul>
+
+      <EditDiffViewer assetId={diffAssetId} onClose={() => setDiffAssetId(null)} />
     </div>
   );
 }
@@ -319,6 +326,7 @@ interface ApprovalCardItemProps {
   onApprove: () => void;
   onReject: () => void;
   onOpen?: () => void;
+  onOpenEdits: () => void;
   onRegenerated: () => void;
 }
 
@@ -330,6 +338,7 @@ function ApprovalCardItem({
   onApprove,
   onReject,
   onOpen,
+  onOpenEdits,
   onRegenerated
 }: ApprovalCardItemProps) {
   const cardData = useApprovalCardData(asset.id, refreshKey);
@@ -369,7 +378,7 @@ function ApprovalCardItem({
               />
               <StatusBadge status={asset.status} />
               {asset.destination ? <DestinationBadge destination={asset.destination} /> : null}
-              {showEditedBadge ? <EditedBadge count={editsCount} /> : null}
+              {showEditedBadge ? <EditedBadge count={editsCount} onClick={onOpenEdits} /> : null}
             </div>
           </div>
 
