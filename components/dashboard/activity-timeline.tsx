@@ -19,6 +19,7 @@ import {
   type LifecycleTimelineEvent,
   type PipelineTimelineEvent
 } from "./timeline-types";
+import { AgentOutputDrawer } from "./agent-output-drawer";
 
 type Status = "idle" | "loading" | "success" | "error";
 
@@ -117,6 +118,7 @@ export function ActivityTimeline({ refreshKey = 0 }: ActivityTimelineProps) {
   const [events, setEvents] = useState<AuditEvent[]>([]);
   const [status, setStatus] = useState<Status>("idle");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [drawerEvent, setDrawerEvent] = useState<PipelineTimelineEvent | null>(null);
 
   const load = useCallback(async () => {
     setStatus("loading");
@@ -167,6 +169,7 @@ export function ActivityTimeline({ refreshKey = 0 }: ActivityTimelineProps) {
               group={group}
               collapsed={collapsedGroups[group.assetId] ?? false}
               onToggle={() => toggleGroup(group.assetId)}
+              onOpenEvent={(event) => setDrawerEvent(event)}
             />
           ))}
         </div>
@@ -175,6 +178,8 @@ export function ActivityTimeline({ refreshKey = 0 }: ActivityTimelineProps) {
       {view.lifecycle.length > 0 ? (
         <LifecycleList events={view.lifecycle} />
       ) : null}
+
+      <AgentOutputDrawer event={drawerEvent} onClose={() => setDrawerEvent(null)} />
     </section>
   );
 }
@@ -182,11 +187,13 @@ export function ActivityTimeline({ refreshKey = 0 }: ActivityTimelineProps) {
 function PipelineGroupBlock({
   group,
   collapsed,
-  onToggle
+  onToggle,
+  onOpenEvent
 }: {
   group: GeneratedGroup;
   collapsed: boolean;
   onToggle: () => void;
+  onOpenEvent: (event: PipelineTimelineEvent) => void;
 }) {
   const Chevron = collapsed ? ChevronRight : ChevronDown;
   return (
@@ -211,7 +218,7 @@ function PipelineGroupBlock({
       {!collapsed ? (
         <ol className="relative space-y-3 px-3 pb-3 pl-7 before:absolute before:left-[19px] before:top-2 before:bottom-2 before:w-px before:bg-line-soft">
           {group.events.map((event) => (
-            <PipelineEventRow key={event.id} event={event} />
+            <PipelineEventRow key={event.id} event={event} onOpen={() => onOpenEvent(event)} />
           ))}
         </ol>
       ) : null}
@@ -219,7 +226,13 @@ function PipelineGroupBlock({
   );
 }
 
-function PipelineEventRow({ event }: { event: PipelineTimelineEvent }) {
+function PipelineEventRow({
+  event,
+  onOpen
+}: {
+  event: PipelineTimelineEvent;
+  onOpen: () => void;
+}) {
   const Icon = AGENT_ICON[event.payload.agent];
   const tone = pipelineTone(event);
   const errored = event.payload.summary.startsWith("error:");
@@ -229,7 +242,12 @@ function PipelineEventRow({ event }: { event: PipelineTimelineEvent }) {
         aria-hidden
         className={`absolute -left-[11px] top-1 h-2.5 w-2.5 rounded-full ring-2 ring-canvas-input ${tone}`}
       />
-      <div className="flex items-start justify-between gap-2">
+      <button
+        type="button"
+        onClick={onOpen}
+        aria-label={`View ${AGENT_LABEL[event.payload.agent]} output`}
+        className="group flex w-full items-start justify-between gap-2 rounded-md py-0.5 pr-1 text-left hover:bg-canvas-hover/40"
+      >
         <div className="min-w-0">
           <div className="flex items-center gap-1.5">
             <Icon className={`h-3.5 w-3.5 ${errored ? "text-signal-danger" : "text-ink-300"}`} />
@@ -243,7 +261,7 @@ function PipelineEventRow({ event }: { event: PipelineTimelineEvent }) {
           </p>
         </div>
         <span className="shrink-0 text-[10px] text-ink-500">{formatTime(event.createdAt)}</span>
-      </div>
+      </button>
     </li>
   );
 }
