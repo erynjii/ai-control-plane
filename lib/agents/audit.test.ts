@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPipelineAuditInserts,
+  buildStrategyOverrideInsert,
   isPipelineAuditAction,
   PIPELINE_AUDIT_ACTIONS,
   pipelineActionForAgent
@@ -206,5 +207,42 @@ describe("buildPipelineAuditInserts", () => {
       runId: "run_abc"
     });
     expect(rows).toEqual([]);
+  });
+});
+
+describe("buildStrategyOverrideInsert", () => {
+  it("emits a single strategy_overridden row attributed to the user", () => {
+    const row = buildStrategyOverrideInsert({
+      assetId: "asset_1",
+      userId: "user_1",
+      runId: "run_xyz",
+      createdAt: "2026-04-22T00:00:00.000Z"
+    });
+    expect(row).toEqual({
+      asset_id: "asset_1",
+      user_id: "user_1",
+      action: "pipeline.strategy_overridden",
+      metadata: {
+        agent: "strategy",
+        durationMs: 0,
+        model: "user-override",
+        costUsd: 0,
+        summary: "Brief overridden by user",
+        runId: "run_xyz"
+      },
+      created_at: "2026-04-22T00:00:00.000Z"
+    });
+  });
+
+  it("uses the action name (not a metadata.attribution field) to signal user authorship", () => {
+    // Regression lock on Q's feedback: action name alone conveys attribution.
+    const row = buildStrategyOverrideInsert({
+      assetId: "asset_1",
+      userId: "user_1",
+      runId: "run_xyz",
+      createdAt: "2026-04-22T00:00:00.000Z"
+    });
+    expect(row.action).toBe("pipeline.strategy_overridden");
+    expect("attribution" in row.metadata).toBe(false);
   });
 });

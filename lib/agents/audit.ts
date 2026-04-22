@@ -11,7 +11,12 @@ export const PIPELINE_AUDIT_ACTIONS = [
   "pipeline.copy_drafted",
   "pipeline.brand_reviewed",
   "pipeline.image_generated",
-  "pipeline.compliance_checked"
+  "pipeline.compliance_checked",
+  // strategy_overridden is emitted instead of strategy_drafted when the
+  // caller seeds the brief from a user-supplied override (regenerate
+  // endpoint with step=strategy + briefOverride). The action name alone
+  // carries the attribution — no extra metadata field needed.
+  "pipeline.strategy_overridden"
 ] as const;
 
 export type PipelineAuditAction = (typeof PIPELINE_AUDIT_ACTIONS)[number];
@@ -98,4 +103,37 @@ export function buildPipelineAuditInserts(params: BuildAuditInsertsParams): Audi
     },
     created_at: step.finishedAt
   }));
+}
+
+/** Build a single audit event row for "user overrode the strategy brief".
+ *  Emitted by the regenerate endpoint when step=strategy + a briefOverride
+ *  is submitted, IN ADDITION to the standard stepLog-derived events for
+ *  the downstream agents that re-ran. */
+export interface BuildStrategyOverrideInsertParams {
+  assetId: string;
+  userId: string;
+  runId: string;
+  /** ISO timestamp to stamp created_at with. Caller-supplied for
+   *  determinism and to place the event before downstream events in the
+   *  timeline. */
+  createdAt: string;
+}
+
+export function buildStrategyOverrideInsert(
+  params: BuildStrategyOverrideInsertParams
+): AuditEventInsert {
+  return {
+    asset_id: params.assetId,
+    user_id: params.userId,
+    action: "pipeline.strategy_overridden",
+    metadata: {
+      agent: "strategy",
+      durationMs: 0,
+      model: "user-override",
+      costUsd: 0,
+      summary: "Brief overridden by user",
+      runId: params.runId
+    },
+    created_at: params.createdAt
+  };
 }
