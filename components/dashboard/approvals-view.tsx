@@ -3,8 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { CheckCircle2, ExternalLink, Image as ImageIcon, Video, XCircle } from "lucide-react";
 import type { Asset, AssetStatus } from "@/lib/types";
-import { RiskBadge } from "@/components/dashboard/risk-badge";
-import { DestinationBadge, StatusBadge } from "@/components/dashboard/destination-badge";
+import type { FlagSeverity } from "@/lib/agents/types";
+import { ApprovalCardBrief } from "./approval-card-brief";
+import { ApprovalCardPill } from "./approval-card-pill";
+import { PartialRegenerateMenu } from "./partial-regenerate-menu";
+import { EditedBadge } from "./edited-badge";
+import { DestinationBadge, StatusBadge } from "./destination-badge";
+import { clearApprovalCardCache, useApprovalCardData } from "./use-approval-card-data";
 
 type LoadStatus = "idle" | "loading" | "success" | "error";
 
@@ -117,6 +122,10 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("pending");
   const [counts, setCounts] = useState<Counts>({ pending: 0, approved: 0, published: 0 });
+  // Local refresh key bumped when a regenerate completes, so the affected
+  // card's useApprovalCardData re-fetches. Multiplied with the external
+  // refreshKey so parent-driven refresh still busts the cache.
+  const [localRefresh, setLocalRefresh] = useState(0);
 
   const loadCounts = useCallback(async () => {
     try {
@@ -174,7 +183,6 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
       setAssets((current) => current.filter((asset) => asset.id !== id));
       setCounts((current) => ({ ...current, pending: Math.max(0, current.pending - 1) }));
       onAction?.();
-      // Refresh counts so Approved tab reflects the new approval.
       loadCounts();
     } catch {
       setActionError("Network error. Please try again.");
@@ -184,8 +192,20 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
   };
 
   const refresh = () => {
+    clearApprovalCardCache();
+    setLocalRefresh((k) => k + 1);
     loadCounts();
     loadList(activeTab);
+  };
+
+  const handleRegenerated = () => {
+    // A regenerate has landed. Bump the card-data cache key so cards
+    // re-fetch and the global lists catch up.
+    clearApprovalCardCache();
+    setLocalRefresh((k) => k + 1);
+    loadCounts();
+    loadList(activeTab);
+    onAction?.();
   };
 
   const empty = emptyCopy(activeTab);
@@ -210,11 +230,7 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
         </button>
       </header>
 
-      <div
-        role="tablist"
-        aria-label="Approval status filter"
-        className="flex gap-1 border-b border-line-soft"
-      >
+      <div role="tablist" aria-label="Approval status filter" className="flex gap-1 border-b border-line-soft">
         {TABS.map((tab) => {
           const isActive = tab.id === activeTab;
           const count =
@@ -233,9 +249,7 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
               aria-selected={isActive}
               onClick={() => setActiveTab(tab.id)}
               className={`relative inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium ${
-                isActive
-                  ? "text-ink-100"
-                  : "text-ink-400 hover:text-ink-100"
+                isActive ? "text-ink-100" : "text-ink-400 hover:text-ink-100"
               }`}
             >
               <span>{tab.label}</span>
@@ -279,82 +293,139 @@ export function ApprovalsView({ refreshKey = 0, onAction, onOpenAsset }: Approva
       ) : null}
 
       <ul className="space-y-3">
-        {assets.map((asset) => {
-          const isPending = pendingId === asset.id;
-          const captionPreview = asset.output.replace(/\s+/g, " ").slice(0, 220);
-          const showPublishedAt = activeTab === "published" && asset.published_at;
-          const showReviewButtons = activeTab === "pending";
-          return (
-            <li
-              key={asset.id}
-              className="rounded-xl border border-line-soft bg-canvas-card p-4"
-            >
-              <div className="flex gap-4">
-                <Thumbnail asset={asset} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-ink-100">{asset.prompt}</p>
-                      <p className="mt-0.5 text-xs text-ink-500">
-                        {asset.model} ·{" "}
-                        {showPublishedAt && asset.published_at
-                          ? `published ${formatDateTime(asset.published_at)}`
-                          : formatDateTime(asset.created_at)}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                      <RiskBadge risk={asset.risk_level} />
-                      <StatusBadge status={asset.status} />
-                      {asset.destination ? <DestinationBadge destination={asset.destination} /> : null}
-                    </div>
-                  </div>
-                  {captionPreview ? (
-                    <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-ink-300">
-                      {captionPreview}
-                      {asset.output.length > captionPreview.length ? "…" : ""}
-                    </p>
-                  ) : null}
-                  <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
-                    {onOpenAsset ? (
-                      <button
-                        type="button"
-                        onClick={() => onOpenAsset(asset)}
-                        disabled={isPending}
-                        className="inline-flex items-center gap-1 rounded-lg border border-line-soft px-3 py-1.5 text-xs text-ink-300 hover:bg-canvas-hover disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        <ExternalLink className="h-3.5 w-3.5" />
-                        Open
-                      </button>
-                    ) : null}
-                    {showReviewButtons ? (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => transition(asset.id, "rejected")}
-                          disabled={isPending}
-                          className="inline-flex items-center gap-1 rounded-lg border border-line-soft px-3 py-1.5 text-xs text-ink-300 hover:border-signal-danger/50 hover:text-signal-danger disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <XCircle className="h-3.5 w-3.5" />
-                          Reject
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => transition(asset.id, "approved")}
-                          disabled={isPending}
-                          className="inline-flex items-center gap-1 rounded-lg bg-accent-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Approve
-                        </button>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-              </div>
-            </li>
-          );
-        })}
+        {assets.map((asset) => (
+          <ApprovalCardItem
+            key={asset.id}
+            asset={asset}
+            activeTab={activeTab}
+            refreshKey={localRefresh + refreshKey}
+            isPending={pendingId === asset.id}
+            onApprove={() => transition(asset.id, "approved")}
+            onReject={() => transition(asset.id, "rejected")}
+            onOpen={onOpenAsset ? () => onOpenAsset(asset) : undefined}
+            onRegenerated={handleRegenerated}
+          />
+        ))}
       </ul>
     </div>
+  );
+}
+
+interface ApprovalCardItemProps {
+  asset: Asset;
+  activeTab: TabId;
+  refreshKey: number;
+  isPending: boolean;
+  onApprove: () => void;
+  onReject: () => void;
+  onOpen?: () => void;
+  onRegenerated: () => void;
+}
+
+function ApprovalCardItem({
+  asset,
+  activeTab,
+  refreshKey,
+  isPending,
+  onApprove,
+  onReject,
+  onOpen,
+  onRegenerated
+}: ApprovalCardItemProps) {
+  const cardData = useApprovalCardData(asset.id, refreshKey);
+
+  const captionPreview = asset.output.replace(/\s+/g, " ").slice(0, 220);
+  const showPublishedAt = activeTab === "published" && asset.published_at;
+  const showReviewButtons = activeTab === "pending";
+  const editsCount = cardData.edits?.count ?? 0;
+  const showEditedBadge = activeTab !== "pending" && editsCount > 0;
+  const brief = cardData.latestRun?.context.brief;
+  const v2 = Boolean(cardData.latestRun);
+  const flags = cardData.latestRun?.context.flags ?? [];
+  const maxSeverity: FlagSeverity | null =
+    (cardData.latestRun?.max_flag_severity as FlagSeverity | null | undefined) ?? null;
+
+  return (
+    <li className="rounded-xl border border-line-soft bg-canvas-card p-4">
+      <div className="flex gap-4">
+        <Thumbnail asset={asset} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-semibold text-ink-100">{asset.prompt}</p>
+              <p className="mt-0.5 text-xs text-ink-500">
+                {asset.model} ·{" "}
+                {showPublishedAt && asset.published_at
+                  ? `published ${formatDateTime(asset.published_at)}`
+                  : formatDateTime(asset.created_at)}
+              </p>
+            </div>
+            <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+              <ApprovalCardPill
+                riskLevel={asset.risk_level}
+                maxFlagSeverity={maxSeverity}
+                flags={flags}
+                v1Fallback={!v2}
+              />
+              <StatusBadge status={asset.status} />
+              {asset.destination ? <DestinationBadge destination={asset.destination} /> : null}
+              {showEditedBadge ? <EditedBadge count={editsCount} /> : null}
+            </div>
+          </div>
+
+          {captionPreview ? (
+            <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-ink-300">
+              {captionPreview}
+              {asset.output.length > captionPreview.length ? "…" : ""}
+            </p>
+          ) : null}
+
+          {v2 ? <div className="mt-2"><ApprovalCardBrief brief={brief} /></div> : null}
+
+          <div className="mt-3 flex flex-wrap items-center justify-end gap-2">
+            {onOpen ? (
+              <button
+                type="button"
+                onClick={onOpen}
+                disabled={isPending}
+                className="inline-flex items-center gap-1 rounded-lg border border-line-soft px-3 py-1.5 text-xs text-ink-300 hover:bg-canvas-hover disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open
+              </button>
+            ) : null}
+            {showReviewButtons ? (
+              <>
+                <button
+                  type="button"
+                  onClick={onReject}
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1 rounded-lg border border-line-soft px-3 py-1.5 text-xs text-ink-300 hover:border-signal-danger/50 hover:text-signal-danger disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <XCircle className="h-3.5 w-3.5" />
+                  Reject
+                </button>
+                <button
+                  type="button"
+                  onClick={onApprove}
+                  disabled={isPending}
+                  className="inline-flex items-center gap-1 rounded-lg bg-accent-primary px-3 py-1.5 text-xs font-medium text-white hover:bg-accent-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  Approve
+                </button>
+                {v2 ? (
+                  <PartialRegenerateMenu
+                    assetId={asset.id}
+                    brief={brief}
+                    onRegenerated={onRegenerated}
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </div>
+        </div>
+      </div>
+    </li>
   );
 }
