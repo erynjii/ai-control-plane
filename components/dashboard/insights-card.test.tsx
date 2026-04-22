@@ -157,4 +157,55 @@ describe("InsightsCard (PR 4)", () => {
     });
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
   });
+
+  it("renders all seven tile labels", async () => {
+    respondWith(emptyStats());
+    render(<InsightsCard />);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+
+    for (const label of [
+      "Total created",
+      "Approval rate",
+      "Published",
+      "Failed",
+      "Edit rate",
+      "Time to approve",
+      "Cost / approved"
+    ]) {
+      expect(screen.getByText(label)).toBeInTheDocument();
+    }
+  });
+
+  it("renders em-dash for null metrics (no approved posts)", async () => {
+    respondWith(
+      emptyStats({
+        editRate: null,
+        timeToApproveSeconds: null,
+        costPerApprovedUsd: null
+      })
+    );
+    render(<InsightsCard />);
+    await waitFor(() => expect(screen.getByText("Edit rate")).toBeInTheDocument());
+
+    // Edit rate / Time to approve / Cost per approved tiles all show "—".
+    // Total created / Published / Failed render "0". Approval rate also "—"
+    // because approved+rejected = 0. So we expect at least 4 em-dashes.
+    const dashes = screen.getAllByText("—");
+    expect(dashes.length).toBeGreaterThanOrEqual(4);
+  });
+
+  it("formats PR 4 metrics: edit rate as %, time-to-approve as duration, cost as $", async () => {
+    respondWith(
+      emptyStats({
+        editRate: 0.3333,
+        timeToApproveSeconds: 185, // 3m 5s
+        costPerApprovedUsd: 0.12
+      })
+    );
+    render(<InsightsCard />);
+
+    await waitFor(() => expect(screen.getByText("33%")).toBeInTheDocument());
+    expect(screen.getByText("3m 5s")).toBeInTheDocument();
+    expect(screen.getByText("$0.12")).toBeInTheDocument();
+  });
 });

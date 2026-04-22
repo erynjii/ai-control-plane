@@ -50,6 +50,29 @@ function formatPercent(numerator: number, denominator: number): string {
   return `${Math.round((numerator / denominator) * 100)}%`;
 }
 
+function formatRate(rate: number | null): string {
+  if (rate === null) return "—";
+  return `${Math.round(rate * 100)}%`;
+}
+
+function formatDuration(seconds: number | null): string {
+  if (seconds === null) return "—";
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remSeconds = seconds % 60;
+  if (minutes < 60) return remSeconds === 0 ? `${minutes}m` : `${minutes}m ${remSeconds}s`;
+  const hours = Math.floor(minutes / 60);
+  const remMinutes = minutes % 60;
+  return remMinutes === 0 ? `${hours}h` : `${hours}h ${remMinutes}m`;
+}
+
+function formatUsd(value: number | null): string {
+  if (value === null) return "—";
+  if (value >= 1) return `$${value.toFixed(2)}`;
+  // Sub-dollar: show cents precision for readability on typical values.
+  return `$${value.toFixed(3).replace(/0$/, "")}`;
+}
+
 /** Rate is derived from counts, not a direct metric, so we compare the
  *  derived rate in both periods rather than expecting it in previousPeriod. */
 function approvalRateOf(p: PeriodMetrics): number | null {
@@ -144,6 +167,30 @@ export function InsightsCard({ refreshKey = 0 }: InsightsCardProps) {
       label: "Failed",
       value: stats ? stats.failedTotal.toLocaleString() : "—",
       trend: stats ? deltaTrend(stats.failedTotal, previous?.failedTotal) ?? undefined : undefined,
+      higherIsBetter: false
+    },
+    {
+      label: "Edit rate",
+      value: stats ? formatRate(stats.editRate) : "—",
+      trend: stats ? deltaTrend(stats.editRate, previous?.editRate ?? null) ?? undefined : undefined,
+      // Higher edit rate → more manager correction → model drift. Lower is better.
+      higherIsBetter: false
+    },
+    {
+      label: "Time to approve",
+      value: stats ? formatDuration(stats.timeToApproveSeconds) : "—",
+      trend: stats
+        ? deltaTrend(stats.timeToApproveSeconds, previous?.timeToApproveSeconds ?? null) ??
+          undefined
+        : undefined,
+      higherIsBetter: false
+    },
+    {
+      label: "Cost / approved",
+      value: stats ? formatUsd(stats.costPerApprovedUsd) : "—",
+      trend: stats
+        ? deltaTrend(stats.costPerApprovedUsd, previous?.costPerApprovedUsd ?? null) ?? undefined
+        : undefined,
       higherIsBetter: false
     }
   ];
