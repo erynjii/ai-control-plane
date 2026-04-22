@@ -11,7 +11,13 @@ import { GET } from "./route";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 
 type FakeUser = { id: string } | null;
-type Row = { id: string; field: string; edited_at: string };
+type Row = {
+  id: string;
+  field: string;
+  edited_at: string;
+  before?: string;
+  after?: string;
+};
 
 function fakeClient({ user, rows }: { user: FakeUser; rows: Row[] }) {
   const calls: Array<{ fn: string; args: unknown[] }> = [];
@@ -50,8 +56,8 @@ function fakeClient({ user, rows }: { user: FakeUser; rows: Row[] }) {
 
 const mocked = createSupabaseServerClient as unknown as ReturnType<typeof vi.fn>;
 
-function requestFor(): Request {
-  return new Request("http://localhost/api/assets/asset_A/edits");
+function requestFor(params: string = ""): Request {
+  return new Request(`http://localhost/api/assets/asset_A/edits${params}`);
 }
 
 describe("GET /api/assets/[id]/edits", () => {
@@ -109,5 +115,73 @@ describe("GET /api/assets/[id]/edits", () => {
 
     expect(resCross.status).toBe(resOwnerNoEdits.status);
     expect(await resCross.json()).toEqual(await resOwnerNoEdits.json());
+  });
+
+  it("(d) default shape does NOT include the edits array and selects only the compact columns", async () => {
+    const { client, calls } = fakeClient({
+      user: { id: "user_A" },
+      rows: [{ id: "edit_1", field: "output", edited_at: "2026-04-22T00:00:00.000Z" }]
+    });
+    mocked.mockReturnValueOnce(client);
+
+    const res = await GET(requestFor(), { params: { id: "asset_A" } });
+    const body = await res.json();
+    expect(body).not.toHaveProperty("edits");
+
+    const selectCols = (calls.find((c) => c.fn === "select")?.args[0] ?? "") as string;
+    expect(selectCols).not.toContain("before");
+    expect(selectCols).not.toContain("after");
+  });
+
+  it("(e) include=full returns edits array with before/after and selects the full column set", async () => {
+    const { client, calls } = fakeClient({
+      user: { id: "user_A" },
+      rows: [
+        {
+          id: "edit_2",
+          field: "output",
+          before: "We got it.",
+          after: "We've got it.",
+          edited_at: "2026-04-22T00:02:00.000Z"
+        },
+        {
+          id: "edit_1",
+          field: "output",
+          before: "Best ever.",
+          after: "A new favourite.",
+          edited_at: "2026-04-22T00:01:00.000Z"
+        }
+      ]
+    });
+    mocked.mockReturnValueOnce(client);
+
+    const res = await GET(requestFor("?include=full"), { params: { id: "asset_A" } });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.count).toBe(2);
+    expect(body.latest).toEqual({ field: "output", editedAt: "2026-04-22T00:02:00.000Z" });
+    expect(body.edits).toHaveLength(2);
+    expect(body.edits[0]).toEqual({
+      id: "edit_2",
+      field: "output",
+      before: "We got it.",
+      after: "We've got it.",
+      editedAt: "2026-04-22T00:02:00.000Z"
+    });
+    expect(body.edits[1].before).toBe("Best ever.");
+
+    const selectCols = (calls.find((c) => c.fn === "select")?.args[0] ?? "") as string;
+    expect(selectCols).toContain("before");
+    expect(selectCols).toContain("after");
+  });
+
+  it("(f) include=full with RLS-stripped rowset returns empty edits array — still no presence oracle", async () => {
+    const { client } = fakeClient({ user: { id: "user_B" }, rows: [] });
+    mocked.mockReturnValueOnce(client);
+
+    const res = await GET(requestFor("?include=full"), { params: { id: "asset_A" } });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ count: 0, latest: null, edits: [] });
   });
 });
