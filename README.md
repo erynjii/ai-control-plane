@@ -57,3 +57,45 @@ Migrations required:
 Pipeline detail (brief / variants / flags / stepLog) is joined on
 `assets.id = pipeline_runs.asset_id` when needed — wired into the approval
 card and activity timeline in subsequent PRs.
+
+## Brand feedback loop (PR 4)
+
+Brand can pull the last 20 `manager_edits` for a workspace and append them
+as a "Recent manager corrections" section to its system prompt, so the
+agent's scoring rubric drifts towards house voice over time. Gated behind
+a CSV allowlist so rollout is explicit:
+
+```
+BRAND_FEEDBACK_WORKSPACES=ws_internal,ws_beta_customer
+```
+
+- Cache: in-process `Map<workspaceId, edits>` with a 1 hour TTL. Each
+  workspace pays one query per hour; a full cold-start process pays
+  `O(workspaces)` queries over the first hour.
+- Failure mode: if the fetch throws, Brand falls back to the base prompt
+  for that invocation. Never blocks a pipeline run.
+- Kill switch: remove the workspace id from the env var. On next cache
+  expiry (worst case: 1h) the feedback section disappears.
+
+### Prompt assembly logging
+
+For debugging prompt drift, dev can opt in to structured logging of each
+Brand prompt:
+
+```
+LOG_BRAND_PROMPTS=true
+```
+
+- **Dev** (`NODE_ENV !== 'production'`): the fully-assembled prompt is
+  included in the log payload.
+- **Prod** (`NODE_ENV === 'production'`): the raw prompt is **redacted**
+  from logs even when the toggle is on. Only structured fields emit:
+  `workspaceId`, `editCount`, `promptLength`, `editSectionChars`,
+  `promptRedactedInProduction: true`. This is defense in depth — if the
+  flag is accidentally shipped enabled, manager edits do not leak into
+  application logs.
+- Off by default in both environments.
+
+Migrations required (for the manager_edits source table):
+
+- `supabase/migrations/0011_create_manager_edits.sql`
