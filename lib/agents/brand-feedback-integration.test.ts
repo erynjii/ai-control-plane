@@ -93,6 +93,53 @@ describe("Brand feedback loop integration", () => {
     expect(systemPrompt).toContain("Cure-all. → Restorative ritual.");
   });
 
+  it("falls back to the base prompt when BRAND_FEEDBACK_WORKSPACES is completely UNSET (default-off kill switch)", async () => {
+    // beforeEach already deletes the var; this test deliberately does NOT
+    // re-set it. This guards against a regression where the default
+    // changes from opt-in to opt-out (e.g. someone inverts the flag, or
+    // the isBrandFeedbackEnabled implementation stops reading from
+    // process.env and misses the undefined case).
+    expect(process.env.BRAND_FEEDBACK_WORKSPACES).toBeUndefined();
+    const fetchStub = vi.fn(async () => SAMPLE_EDITS);
+    const { handler, calls } = captureChat();
+    const runtime = stubRuntime({ chat: handler, fetchBrandEdits: fetchStub });
+
+    await runBrand(ctx("ws_feedback"), runtime);
+
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(calls[0].system).not.toContain("Recent manager corrections");
+    // Stronger assertion: the prompt is byte-identical to the base.
+    expect(calls[0].system).not.toContain("→");
+  });
+
+  it("falls back to the base prompt when the env var is an empty string", async () => {
+    // Another common shape: the env var is set in a template file but
+    // left empty ("BRAND_FEEDBACK_WORKSPACES="). Must behave identically
+    // to unset.
+    process.env.BRAND_FEEDBACK_WORKSPACES = "";
+    const fetchStub = vi.fn(async () => SAMPLE_EDITS);
+    const { handler, calls } = captureChat();
+    const runtime = stubRuntime({ chat: handler, fetchBrandEdits: fetchStub });
+
+    await runBrand(ctx("ws_feedback"), runtime);
+
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(calls[0].system).not.toContain("Recent manager corrections");
+  });
+
+  it("falls back to the base prompt when the env var lists only whitespace / commas", async () => {
+    // Guards against a sloppy edit like `BRAND_FEEDBACK_WORKSPACES=,,  ,`.
+    process.env.BRAND_FEEDBACK_WORKSPACES = ",,  ,";
+    const fetchStub = vi.fn(async () => SAMPLE_EDITS);
+    const { handler, calls } = captureChat();
+    const runtime = stubRuntime({ chat: handler, fetchBrandEdits: fetchStub });
+
+    await runBrand(ctx("ws_feedback"), runtime);
+
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(calls[0].system).not.toContain("Recent manager corrections");
+  });
+
   it("falls back to the base prompt when workspace is NOT on the allowlist (kill switch)", async () => {
     process.env.BRAND_FEEDBACK_WORKSPACES = "ws_other";
     const fetchStub = vi.fn(async () => SAMPLE_EDITS);

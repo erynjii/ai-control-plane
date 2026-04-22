@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildBrandSystemPrompt, logBrandPrompt } from "./brand-prompt";
 import { buildConstraints } from "./constraints";
 import type { StrategyBrief } from "./types";
@@ -127,5 +127,128 @@ describe("logBrandPrompt", () => {
     const payload = log.mock.calls[0][0];
     expect(payload.editSectionChars).toBeGreaterThan(0);
     expect(payload.editSectionChars).toBeLessThan(prompt.length);
+  });
+});
+
+// These tests deliberately do NOT use the devOverride / loggingEnabledOverride
+// injection seams. They exercise the real process.env.NODE_ENV and
+// process.env.LOG_BRAND_PROMPTS read paths, guarding against a regression
+// where someone changes which env var is consulted or inverts a guard and
+// the override-based tests still pass.
+describe("logBrandPrompt — real env reads", () => {
+  // @types/node narrows NODE_ENV so a direct assignment fails TS. Go
+  // through a mutable view of process.env; same runtime behavior.
+  const env = process.env as Record<string, string | undefined>;
+  const originalNodeEnv = env.NODE_ENV;
+  const originalToggle = env.LOG_BRAND_PROMPTS;
+
+  function setEnv(key: string, value: string | undefined) {
+    if (value === undefined) delete env[key];
+    else env[key] = value;
+  }
+
+  afterEach(() => {
+    setEnv("NODE_ENV", originalNodeEnv);
+    setEnv("LOG_BRAND_PROMPTS", originalToggle);
+  });
+
+  it("silent when NODE_ENV=production and LOG_BRAND_PROMPTS is unset", () => {
+    setEnv("NODE_ENV", "production");
+    setEnv("LOG_BRAND_PROMPTS", undefined);
+    const log = vi.fn();
+    logBrandPrompt({
+      workspaceId: "ws_a",
+      prompt: "contains PII: Jane Doe",
+      editCount: 3,
+      log
+    });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("silent when NODE_ENV=production and LOG_BRAND_PROMPTS=false", () => {
+    setEnv("NODE_ENV", "production");
+    setEnv("LOG_BRAND_PROMPTS", "false");
+    const log = vi.fn();
+    logBrandPrompt({
+      workspaceId: "ws_a",
+      prompt: "contains PII: Jane Doe",
+      editCount: 3,
+      log
+    });
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("redacts raw prompt when NODE_ENV=production and LOG_BRAND_PROMPTS=true", () => {
+    // THIS is the "flag accidentally shipped enabled" scenario. Must not
+    // leak the raw prompt even though the logger fires.
+    setEnv("NODE_ENV", "production");
+    setEnv("LOG_BRAND_PROMPTS", "true");
+    const log = vi.fn();
+    const prompt = "System prompt containing PII: customer Jane Doe, SSN 999-99-9999";
+    logBrandPrompt({
+      workspaceId: "ws_a",
+      prompt,
+      editCount: 3,
+      log
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    const payload = log.mock.calls[0][0];
+    expect(payload.prompt).toBeUndefined();
+    expect(payload.promptRedactedInProduction).toBe(true);
+    // Structured fields still surface for debuggability.
+    expect(payload.workspaceId).toBe("ws_a");
+    expect(payload.editCount).toBe(3);
+    expect(payload.promptLength).toBe(prompt.length);
+    // No byte of the raw prompt leaks through the serialized payload.
+    expect(JSON.stringify(payload)).not.toContain("Jane Doe");
+    expect(JSON.stringify(payload)).not.toContain("999-99-9999");
+  });
+
+  it("accepts the common truthy shapes for LOG_BRAND_PROMPTS in prod (still redacts)", () => {
+    setEnv("NODE_ENV", "production");
+    for (const raw of ["true", "1", "yes"]) {
+      setEnv("LOG_BRAND_PROMPTS", raw);
+      const log = vi.fn();
+      logBrandPrompt({
+        workspaceId: "ws_a",
+        prompt: "PII: Jane",
+        editCount: 1,
+        log
+      });
+      expect(log).toHaveBeenCalledTimes(1);
+      expect(log.mock.calls[0][0].prompt).toBeUndefined();
+      expect(log.mock.calls[0][0].promptRedactedInProduction).toBe(true);
+    }
+  });
+
+  it("emits raw prompt in development (NODE_ENV=development, toggle off)", () => {
+    // Dev gets the raw prompt by default — that's the intended behavior
+    // (easy debugging on a laptop). Cemented as a contract so a
+    // well-meaning "always redact" refactor doesn't ship silently.
+    setEnv("NODE_ENV", "development");
+    setEnv("LOG_BRAND_PROMPTS", undefined);
+    const log = vi.fn();
+    const prompt = "the full prompt in dev";
+    logBrandPrompt({
+      workspaceId: "ws_a",
+      prompt,
+      editCount: 2,
+      log
+    });
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(log.mock.calls[0][0].prompt).toBe(prompt);
+  });
+
+  it("treats test env as non-prod (raw prompt emitted when the logger fires)", () => {
+    setEnv("NODE_ENV", "test");
+    setEnv("LOG_BRAND_PROMPTS", undefined);
+    const log = vi.fn();
+    logBrandPrompt({
+      workspaceId: "ws_a",
+      prompt: "the full prompt in test",
+      editCount: 1,
+      log
+    });
+    expect(log.mock.calls[0][0].prompt).toBe("the full prompt in test");
   });
 });
