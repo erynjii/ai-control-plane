@@ -97,7 +97,8 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(BASE_STEPS)
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_abc"
     });
     expect(rows).toHaveLength(5);
     expect(rows.map((r) => r.action)).toEqual([
@@ -115,7 +116,8 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(BASE_STEPS)
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_abc"
     });
     const strategyRow = rows.find((r) => r.action === "pipeline.strategy_drafted");
     expect(strategyRow?.metadata).toMatchObject({
@@ -128,11 +130,22 @@ describe("buildPipelineAuditInserts", () => {
     expect(strategyRow?.metadata.summary.length).toBeGreaterThan(0);
   });
 
+  it("threads runId into every emitted row's metadata", () => {
+    const rows = buildPipelineAuditInserts({
+      assetId: "asset_1",
+      userId: "user_1",
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_xyz"
+    });
+    expect(rows.every((r) => r.metadata.runId === "run_xyz")).toBe(true);
+  });
+
   it("created_at follows finishedAt (monotonic for a normal run)", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(BASE_STEPS)
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_abc"
     });
     const createdAts = rows.map((r) => Date.parse(r.created_at));
     const sorted = [...createdAts].sort((a, b) => a - b);
@@ -162,7 +175,8 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(steps, flags)
+      ctx: cleanCtx(steps, flags),
+      runId: "run_abc"
     });
 
     expect(rows).toHaveLength(3);
@@ -177,14 +191,20 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(steps)
+      ctx: cleanCtx(steps),
+      runId: "run_abc"
     });
     expect(rows[0].metadata.durationMs).toBe(0);
   });
 
   it("returns [] when stepLog is empty", () => {
     const ctx = cleanCtx([]);
-    const rows = buildPipelineAuditInserts({ assetId: "asset_1", userId: "user_1", ctx });
+    const rows = buildPipelineAuditInserts({
+      assetId: "asset_1",
+      userId: "user_1",
+      ctx,
+      runId: "run_abc"
+    });
     expect(rows).toEqual([]);
   });
 });

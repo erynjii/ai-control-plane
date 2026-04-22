@@ -90,6 +90,7 @@ function params(ctx: PipelineContext = makeCtx()): PersistParams {
     prompt: "Announce grand opening.",
     ctx,
     durationMs: 4200,
+    runId: "run_test",
     now: "2026-04-21T00:00:00.000Z"
   };
 }
@@ -129,6 +130,7 @@ describe("buildAssetInsert", () => {
 describe("buildPipelineRunInsert", () => {
   it("aggregates cost across all step logs and picks up max flag severity", () => {
     const row = buildPipelineRunInsert(params(), "asset_abc");
+    expect(row.id).toBe("run_test");
     expect(row.asset_id).toBe("asset_abc");
     expect(row.total_cost_usd).toBeCloseTo(0.19, 4); // 0.05 + 0.1 + 0.04
     expect(row.max_flag_severity).toBe("warning");
@@ -175,8 +177,10 @@ describe("persistPipelineResult", () => {
 
     const result = await persistPipelineResult(supabase, params());
     expect(result.asset.id).toBe("asset_from_db");
+    expect(result.pipelineRunId).toBe("run_test");
     expect(inserts.map((i) => i.table)).toEqual(["assets", "pipeline_runs"]);
     expect((inserts[1].row as { asset_id: string }).asset_id).toBe("asset_from_db");
+    expect((inserts[1].row as { id: string }).id).toBe("run_test");
   });
 
   it("throws when the assets insert errors", async () => {

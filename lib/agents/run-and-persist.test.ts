@@ -132,13 +132,22 @@ describe("runAndPersistPipeline", () => {
     expect(result.ctx.selectedVariantId).toBe("post_rap_v1");
     expect(result.auditEventCount).toBe(5);
     expect(result.auditError).toBeUndefined();
+    expect(typeof result.pipelineRunId).toBe("string");
+    expect(result.pipelineRunId.length).toBeGreaterThan(0);
 
     expect(inserts.map((i) => i.table)).toEqual(["assets", "pipeline_runs", "audit_events"]);
 
-    // audit_events insert is a single batch call (one array, not 5 separate).
+    // The pipeline_runs row carries the same id that run-and-persist generated.
+    const runInsert = inserts[1].row as { id: string };
+    expect(runInsert.id).toBe(result.pipelineRunId);
+
+    // audit_events insert is a single batch call (one array, not 5 separate)
+    // and every row references the same runId.
     const auditInsert = inserts[2];
     expect(Array.isArray(auditInsert.row)).toBe(true);
-    expect((auditInsert.row as unknown[]).length).toBe(5);
+    const auditRows = auditInsert.row as Array<{ metadata: { runId: string } }>;
+    expect(auditRows).toHaveLength(5);
+    expect(auditRows.every((r) => r.metadata.runId === result.pipelineRunId)).toBe(true);
   });
 
   it("short-circuits when the pipeline fails to produce a variant (no persist, no audit)", async () => {
