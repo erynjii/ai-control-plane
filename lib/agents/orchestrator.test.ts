@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { runFromAgent, runPipeline } from "./orchestrator";
+import { AGENT_INVALIDATION_MAP, runFromAgent, runPipeline, runSetFor } from "./orchestrator";
 import { stubRuntime } from "./test-utils";
 import type { ChatRequest, ChatResponse, ImageRequest, ImageResponse } from "./runtime";
-import type { PipelineInit } from "./types";
+import type { AgentName, PipelineInit } from "./types";
 
 const INIT: PipelineInit = {
   postId: "post_int",
@@ -279,5 +279,152 @@ describe("runFromAgent", () => {
     expect(rerun.stepLog.filter((s) => s.agent === "photo")).toHaveLength(1);
     expect(rerun.stepLog.filter((s) => s.agent === "brand")).toHaveLength(1);
     expect(rerun.stepLog.filter((s) => s.agent === "compliance")).toHaveLength(1);
+  });
+});
+
+describe("runSetFor + AGENT_INVALIDATION_MAP", () => {
+  // Encodes the exact dependency graph the product requires. If a future
+  // agent is added to AGENT_INVALIDATION_MAP, these cases force a decision
+  // rather than silently picking up the new agent.
+  const AGENTS: AgentName[] = ["strategy", "copy", "photo", "brand", "compliance"];
+
+  function sorted(set: Set<AgentName>): AgentName[] {
+    return Array.from(set).sort();
+  }
+
+  it("isolate=false reproduces the legacy slice behavior (from → end of order)", () => {
+    expect(sorted(runSetFor("strategy", false))).toEqual(sorted(new Set(AGENTS)));
+    expect(sorted(runSetFor("copy", false))).toEqual(
+      sorted(new Set<AgentName>(["copy", "photo", "brand", "compliance"]))
+    );
+    expect(sorted(runSetFor("photo", false))).toEqual(
+      sorted(new Set<AgentName>(["photo", "brand", "compliance"]))
+    );
+    expect(sorted(runSetFor("brand", false))).toEqual(
+      sorted(new Set<AgentName>(["brand", "compliance"]))
+    );
+    expect(sorted(runSetFor("compliance", false))).toEqual(
+      sorted(new Set<AgentName>(["compliance"]))
+    );
+  });
+
+  it("isolate=true traverses the explicit dependency graph", () => {
+    // strategy invalidates everything downstream.
+    expect(sorted(runSetFor("strategy", true))).toEqual(sorted(new Set(AGENTS)));
+    // copy invalidates brand + compliance (NOT photo).
+    expect(sorted(runSetFor("copy", true))).toEqual(
+      sorted(new Set<AgentName>(["copy", "brand", "compliance"]))
+    );
+    // photo invalidates compliance only (NOT copy, NOT brand).
+    expect(sorted(runSetFor("photo", true))).toEqual(
+      sorted(new Set<AgentName>(["photo", "compliance"]))
+    );
+    // brand invalidates compliance.
+    expect(sorted(runSetFor("brand", true))).toEqual(
+      sorted(new Set<AgentName>(["brand", "compliance"]))
+    );
+    // compliance invalidates nothing downstream.
+    expect(sorted(runSetFor("compliance", true))).toEqual(
+      sorted(new Set<AgentName>(["compliance"]))
+    );
+  });
+
+  it("invalidation map entries are each subsets of AGENTS and don't include their own key", () => {
+    for (const agent of AGENTS) {
+      const downstream = AGENT_INVALIDATION_MAP[agent];
+      for (const d of downstream) {
+        expect(AGENTS).toContain(d);
+        expect(d).not.toBe(agent);
+      }
+    }
+  });
+});
+
+describe("runFromAgent isolate=true behavior", () => {
+  function baselineRuntime() {
+    return stubRuntime({
+      chat: chatByAgent({
+        strategy: () => ({ text: STRATEGY_JSON, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 }),
+        copy: () => ({ text: COPY_JSON, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 }),
+        brand: () => ({ text: BRAND_JSON_HIGHER_FIRST, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 }),
+        compliance: () => ({ text: COMPLIANCE_JSON, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 })
+      }),
+      image: defaultImage()
+    });
+  }
+
+  it("isolate copy: re-runs copy + brand + compliance; does NOT touch photo output", async () => {
+    const firstRun = await runPipeline(INIT, baselineRuntime());
+    const originalImageUrl = firstRun.imageUrl;
+    const originalImagePrompt = firstRun.imagePrompt;
+
+    let photoCalls = 0;
+    const rerunRuntime = stubRuntime({
+      chat: chatByAgent({
+        strategy: () => {
+          throw new Error("strategy should not run on isolated copy re-run");
+        },
+        copy: () => ({ text: COPY_JSON, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 }),
+        brand: () => ({ text: BRAND_JSON_HIGHER_FIRST, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 }),
+        compliance: () => ({ text: COMPLIANCE_JSON, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 })
+      }),
+      image: async () => {
+        photoCalls += 1;
+        return { imageUrl: "should-not-be-used", model: "gpt-image-1", costUsd: 0.04 };
+      }
+    });
+
+    const rerun = await runFromAgent(firstRun, "copy", rerunRuntime, { isolate: true });
+
+    // Photo was NOT re-run.
+    expect(photoCalls).toBe(0);
+    expect(rerun.imageUrl).toBe(originalImageUrl);
+    expect(rerun.imagePrompt).toBe(originalImagePrompt);
+
+    // Copy + brand + compliance each have exactly one entry (the re-run).
+    expect(rerun.stepLog.filter((s) => s.agent === "copy")).toHaveLength(1);
+    expect(rerun.stepLog.filter((s) => s.agent === "brand")).toHaveLength(1);
+    expect(rerun.stepLog.filter((s) => s.agent === "compliance")).toHaveLength(1);
+    // Strategy + photo entries preserved from the original run.
+    expect(rerun.stepLog.filter((s) => s.agent === "strategy")).toHaveLength(1);
+    expect(rerun.stepLog.filter((s) => s.agent === "photo")).toHaveLength(1);
+  });
+
+  it("isolate photo: re-runs photo + compliance; does NOT touch copy or brand outputs", async () => {
+    const firstRun = await runPipeline(INIT, baselineRuntime());
+    const originalVariants = firstRun.variants;
+    const originalSelectedId = firstRun.selectedVariantId;
+    const originalFirstScore = firstRun.variants?.[0].brandScore;
+
+    const rerunRuntime = stubRuntime({
+      chat: chatByAgent({
+        strategy: () => {
+          throw new Error("strategy should not run on isolated photo re-run");
+        },
+        copy: () => {
+          throw new Error("copy should not run on isolated photo re-run");
+        },
+        brand: () => {
+          throw new Error("brand should not run on isolated photo re-run");
+        },
+        compliance: () => ({ text: COMPLIANCE_JSON, model: "gpt-4.1-mini", inputTokens: 10, outputTokens: 10 })
+      }),
+      image: async () => ({ imageUrl: "https://cdn.example/new.png", model: "gpt-image-1", costUsd: 0.04 })
+    });
+
+    const rerun = await runFromAgent(firstRun, "photo", rerunRuntime, { isolate: true });
+
+    expect(rerun.imageUrl).toBe("https://cdn.example/new.png");
+    // Variants + brand scores preserved.
+    expect(rerun.variants?.[0].text).toBe(originalVariants?.[0].text);
+    expect(rerun.variants?.[0].brandScore).toBe(originalFirstScore);
+    expect(rerun.selectedVariantId).toBe(originalSelectedId);
+
+    // Only photo + compliance re-ran.
+    expect(rerun.stepLog.filter((s) => s.agent === "photo")).toHaveLength(1);
+    expect(rerun.stepLog.filter((s) => s.agent === "compliance")).toHaveLength(1);
+    expect(rerun.stepLog.filter((s) => s.agent === "copy")).toHaveLength(1); // preserved
+    expect(rerun.stepLog.filter((s) => s.agent === "brand")).toHaveLength(1); // preserved
+    expect(rerun.stepLog.filter((s) => s.agent === "strategy")).toHaveLength(1); // preserved
   });
 });
