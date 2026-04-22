@@ -8,9 +8,8 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { ASSET_SELECT } from "@/lib/assets/select";
 import { buildMediaPath, uploadMediaObject } from "@/lib/media/storage";
 import { isPipelineV2Enabled } from "@/lib/flags";
-import { runPipeline } from "@/lib/agents/orchestrator";
 import { createOpenAIRuntime } from "@/lib/agents/openai-runtime";
-import { persistPipelineResult } from "@/lib/agents/persist";
+import { runAndPersistPipeline } from "@/lib/agents/run-and-persist";
 import type { PipelineInit } from "@/lib/agents/types";
 
 const MAX_CONVERSATION_TITLE_LENGTH = 80;
@@ -111,45 +110,57 @@ export async function POST(request: Request) {
       connectedAccountId: null,
       platform: "instagram"
     };
-    const startedAt = Date.now();
-    const ctx = await runPipeline(init, runtime);
-    const durationMs = Date.now() - startedAt;
 
-    if (!ctx.selectedVariantId || !ctx.imageUrl) {
+    const result = await runAndPersistPipeline({
+      supabase,
+      runtime,
+      init,
+      userId: user.id,
+      workspaceId,
+      connectedAccountId: null,
+      conversationId,
+      prompt
+    });
+
+    if (!result.ok) {
+      const status = result.reason === "pipeline_incomplete" ? 502 : 500;
+      if (result.reason === "persist_failed") {
+        console.error("generate-post v2 persist failed", result.message);
+      }
       return NextResponse.json(
-        { error: "Pipeline did not produce a caption + image.", flags: ctx.flags, stepLog: ctx.stepLog },
-        { status: 502 }
+        {
+          error: result.message,
+          flags: result.ctx.flags,
+          stepLog: result.ctx.stepLog
+        },
+        { status }
       );
     }
 
-    try {
-      const { asset } = await persistPipelineResult(supabase, {
-        userId: user.id,
-        workspaceId,
-        connectedAccountId: null,
-        conversationId,
-        prompt,
-        ctx,
-        durationMs
-      });
-      const selected = ctx.variants?.find((v) => v.id === ctx.selectedVariantId);
-      const scan = scanContent({ prompt, output: selected?.text ?? asset.output });
-
-      await supabase.from("conversations").update({ updated_at: new Date().toISOString() }).eq("id", conversationId);
-
-      return NextResponse.json({
-        output: asset.output,
-        imagePrompt: ctx.imagePrompt,
-        imageUrl: ctx.imageUrl,
-        asset,
-        scan,
-        conversationId
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to persist pipeline result.";
-      console.error("generate-post v2 persist failed", message);
-      return NextResponse.json({ error: message }, { status: 500 });
+    if (result.auditError) {
+      // Non-fatal: asset is live, only timeline events are missing. Log so
+      // we notice in dev; don't block the response.
+      const auditMessage =
+        result.auditError instanceof Error ? result.auditError.message : String(result.auditError);
+      console.error("generate-post v2 audit emit failed", auditMessage);
     }
+
+    const selected = result.ctx.variants?.find((v) => v.id === result.ctx.selectedVariantId);
+    const scan = scanContent({ prompt, output: selected?.text ?? result.asset.output });
+
+    await supabase
+      .from("conversations")
+      .update({ updated_at: new Date().toISOString() })
+      .eq("id", conversationId);
+
+    return NextResponse.json({
+      output: result.asset.output,
+      imagePrompt: result.ctx.imagePrompt,
+      imageUrl: result.ctx.imageUrl,
+      asset: result.asset,
+      scan,
+      conversationId
+    });
   }
 
   const selectedModel = resolveModelForMode(modelMode);
