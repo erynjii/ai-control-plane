@@ -47,6 +47,18 @@ export type AuditEvent = {
   created_at: string;
 };
 
+export type ManagerEditField = "output";
+
+export type ManagerEdit = {
+  id: string;
+  asset_id: string;
+  user_id: string;
+  field: ManagerEditField;
+  before: string;
+  after: string;
+  edited_at: string;
+};
+
 export type Conversation = {
   id: string;
   title: string;
