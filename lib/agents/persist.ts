@@ -25,6 +25,10 @@ export interface PersistParams {
   prompt: string;
   ctx: PipelineContext;
   durationMs: number;
+  /** pipeline_runs.id for this run. Caller generates upfront so the same
+   *  id can be threaded into the audit_events metadata without waiting on
+   *  a round-trip to the DB. */
+  runId: string;
   /** Timestamp used for created_at/updated_at (ISO 8601). Explicit so tests
    *  are deterministic. */
   now?: string;
@@ -32,6 +36,7 @@ export interface PersistParams {
 
 export interface PersistResult {
   asset: Asset;
+  pipelineRunId: string;
   pipelineRunError?: unknown;
 }
 
@@ -97,8 +102,9 @@ export function buildAssetInsert(params: PersistParams): Record<string, unknown>
 }
 
 export function buildPipelineRunInsert(params: PersistParams, assetId: string): Record<string, unknown> {
-  const { ctx, userId, workspaceId, connectedAccountId, durationMs } = params;
+  const { ctx, userId, workspaceId, connectedAccountId, durationMs, runId } = params;
   return {
+    id: runId,
     asset_id: assetId,
     user_id: userId,
     workspace_id: workspaceId,
@@ -129,5 +135,9 @@ export async function persistPipelineResult(
 
   const runRow = buildPipelineRunInsert(params, asset.id);
   const runResult = await supabase.from("pipeline_runs").insert(runRow);
-  return { asset, pipelineRunError: runResult.error ?? undefined };
+  return {
+    asset,
+    pipelineRunId: params.runId,
+    pipelineRunError: runResult.error ?? undefined
+  };
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { ASSET_SELECT } from "@/lib/assets/select";
+import { buildEditInsert } from "@/lib/agents/edits";
 
 const REVIEW_STATUSES = ["draft", "pending_review", "approved", "rejected"] as const;
 const MEDIA_TYPES = ["image", "video"] as const;
@@ -64,12 +65,18 @@ export async function PATCH(request: Request, { params }: { params: { id: string
     parsedBody.data.media_type !== undefined ||
     parsedBody.data.media_prompt !== undefined;
 
+  // Capture the prior output when the caller is editing it, so we can
+  // record the diff into manager_edits after the update succeeds.
+  let priorOutput: string | undefined;
+
   if (needsContentCheck) {
+    const columns =
+      parsedBody.data.output !== undefined ? "status, output" : "status";
     const { data: existing, error: fetchError } = await supabase
       .from("assets")
-      .select("status")
+      .select(columns)
       .eq("id", params.id)
-      .single();
+      .single<{ status: string; output?: string }>();
     if (fetchError || !existing) {
       return NextResponse.json({ error: "Asset not found." }, { status: 404 });
     }
@@ -78,6 +85,9 @@ export async function PATCH(request: Request, { params }: { params: { id: string
         { error: `Content cannot be edited while status is ${existing.status}.` },
         { status: 409 }
       );
+    }
+    if (parsedBody.data.output !== undefined) {
+      priorOutput = existing.output;
     }
   }
 
@@ -98,6 +108,26 @@ export async function PATCH(request: Request, { params }: { params: { id: string
 
   if (error || !data) {
     return NextResponse.json({ error: "Failed to update asset." }, { status: 404 });
+  }
+
+  // Record the caption edit into manager_edits. Non-transactional with the
+  // assets update (matches the rest of the codebase's PostgREST writes).
+  // TODO(cross-table-atomicity): promote to an RPC when we migrate every
+  // audit-style write off PostgREST. Tracked alongside PR 1/2 notes.
+  if (parsedBody.data.output !== undefined && priorOutput !== undefined) {
+    const editRow = buildEditInsert({
+      assetId: params.id,
+      userId: user.id,
+      field: "output",
+      before: priorOutput,
+      after: parsedBody.data.output
+    });
+    if (editRow) {
+      const { error: editError } = await supabase.from("manager_edits").insert(editRow);
+      if (editError) {
+        console.error("manager_edits insert failed", editError);
+      }
+    }
   }
 
   return NextResponse.json({ asset: data });

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildPipelineAuditInserts,
+  buildStrategyOverrideInsert,
   isPipelineAuditAction,
   PIPELINE_AUDIT_ACTIONS,
   pipelineActionForAgent
@@ -97,7 +98,8 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(BASE_STEPS)
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_abc"
     });
     expect(rows).toHaveLength(5);
     expect(rows.map((r) => r.action)).toEqual([
@@ -115,7 +117,8 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(BASE_STEPS)
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_abc"
     });
     const strategyRow = rows.find((r) => r.action === "pipeline.strategy_drafted");
     expect(strategyRow?.metadata).toMatchObject({
@@ -128,11 +131,22 @@ describe("buildPipelineAuditInserts", () => {
     expect(strategyRow?.metadata.summary.length).toBeGreaterThan(0);
   });
 
+  it("threads runId into every emitted row's metadata", () => {
+    const rows = buildPipelineAuditInserts({
+      assetId: "asset_1",
+      userId: "user_1",
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_xyz"
+    });
+    expect(rows.every((r) => r.metadata.runId === "run_xyz")).toBe(true);
+  });
+
   it("created_at follows finishedAt (monotonic for a normal run)", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(BASE_STEPS)
+      ctx: cleanCtx(BASE_STEPS),
+      runId: "run_abc"
     });
     const createdAts = rows.map((r) => Date.parse(r.created_at));
     const sorted = [...createdAts].sort((a, b) => a - b);
@@ -162,7 +176,8 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(steps, flags)
+      ctx: cleanCtx(steps, flags),
+      runId: "run_abc"
     });
 
     expect(rows).toHaveLength(3);
@@ -177,14 +192,57 @@ describe("buildPipelineAuditInserts", () => {
     const rows = buildPipelineAuditInserts({
       assetId: "asset_1",
       userId: "user_1",
-      ctx: cleanCtx(steps)
+      ctx: cleanCtx(steps),
+      runId: "run_abc"
     });
     expect(rows[0].metadata.durationMs).toBe(0);
   });
 
   it("returns [] when stepLog is empty", () => {
     const ctx = cleanCtx([]);
-    const rows = buildPipelineAuditInserts({ assetId: "asset_1", userId: "user_1", ctx });
+    const rows = buildPipelineAuditInserts({
+      assetId: "asset_1",
+      userId: "user_1",
+      ctx,
+      runId: "run_abc"
+    });
     expect(rows).toEqual([]);
+  });
+});
+
+describe("buildStrategyOverrideInsert", () => {
+  it("emits a single strategy_overridden row attributed to the user", () => {
+    const row = buildStrategyOverrideInsert({
+      assetId: "asset_1",
+      userId: "user_1",
+      runId: "run_xyz",
+      createdAt: "2026-04-22T00:00:00.000Z"
+    });
+    expect(row).toEqual({
+      asset_id: "asset_1",
+      user_id: "user_1",
+      action: "pipeline.strategy_overridden",
+      metadata: {
+        agent: "strategy",
+        durationMs: 0,
+        model: "user-override",
+        costUsd: 0,
+        summary: "Brief overridden by user",
+        runId: "run_xyz"
+      },
+      created_at: "2026-04-22T00:00:00.000Z"
+    });
+  });
+
+  it("uses the action name (not a metadata.attribution field) to signal user authorship", () => {
+    // Regression lock on Q's feedback: action name alone conveys attribution.
+    const row = buildStrategyOverrideInsert({
+      assetId: "asset_1",
+      userId: "user_1",
+      runId: "run_xyz",
+      createdAt: "2026-04-22T00:00:00.000Z"
+    });
+    expect(row.action).toBe("pipeline.strategy_overridden");
+    expect("attribution" in row.metadata).toBe(false);
   });
 });

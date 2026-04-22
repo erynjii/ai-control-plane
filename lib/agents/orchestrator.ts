@@ -36,6 +36,42 @@ export interface OrchestratorOptions {
   costCapUsd?: number;
 }
 
+export interface RunFromAgentOptions extends OrchestratorOptions {
+  /** When true, only `from` + its transitive downstream consumers re-run
+   *  (per AGENT_INVALIDATION_MAP). Parallel siblings that don't consume
+   *  `from`'s output are preserved. Default is false, which keeps the
+   *  original "from → end of AGENT_ORDER" semantics. */
+  isolate?: boolean;
+}
+
+// Explicit dependency graph — each key invalidates its listed downstream
+// consumers when re-run. Encoded as data so adding a new agent is a local
+// change rather than branching logic elsewhere.
+//
+//   Strategy → Copy, Photo, Brand, Compliance   (brief feeds all three)
+//   Copy     → Brand, Compliance                 (variants feed Brand; selected variant feeds Compliance)
+//   Photo    → Compliance                        (image feeds Compliance only; NOT Brand — Brand scores captions)
+//   Brand    → Compliance                        (selected variant id feeds Compliance)
+//   Compliance → ∅
+export const AGENT_INVALIDATION_MAP: Record<AgentName, readonly AgentName[]> = {
+  strategy: ["copy", "photo", "brand", "compliance"],
+  copy: ["brand", "compliance"],
+  photo: ["compliance"],
+  brand: ["compliance"],
+  compliance: []
+};
+
+/** Compute the set of agents that should re-run given a starting agent and
+ *  the isolate flag. Isolated runs traverse AGENT_INVALIDATION_MAP; full
+ *  runs slice AGENT_ORDER from the starting agent onward. */
+export function runSetFor(from: AgentName, isolate: boolean): Set<AgentName> {
+  if (isolate) {
+    return new Set<AgentName>([from, ...AGENT_INVALIDATION_MAP[from]]);
+  }
+  const fromIndex = AGENT_ORDER.indexOf(from);
+  return new Set(AGENT_ORDER.slice(fromIndex));
+}
+
 function resolveCostCap(options: OrchestratorOptions | undefined): number {
   if (options?.costCapUsd !== undefined) return options.costCapUsd;
   const raw = process.env.PIPELINE_COST_CAP_USD;
@@ -85,31 +121,31 @@ export async function runPipeline(
   options?: OrchestratorOptions
 ): Promise<PipelineContext> {
   const costCap = resolveCostCap(options);
-  return executePipelineFrom(initialContext(init), "strategy", runtime, costCap);
+  const runSet = new Set<AgentName>(AGENT_ORDER);
+  return executePipelineWithRunSet(initialContext(init), runSet, runtime, costCap);
 }
 
 /**
- * Re-run the pipeline starting from a specific agent. The stub for PR 1:
- * no HTTP route yet (wired in PR 3). Semantics:
- *   - `from` = agent to start at. Steps before it are preserved unchanged.
- *   - Steps from `from` onward are re-executed, replacing their previous
- *     outputs and stepLog entries.
- *   - Cost cap applies to the RESUMED run only; prior costs are preserved
- *     in stepLog but not counted against the new cap.
+ * Re-run a subset of the pipeline from an existing context.
+ *   - `from` — which agent to start at.
+ *   - `options.isolate` — when true, only `from` + its downstream consumers
+ *     (per AGENT_INVALIDATION_MAP) re-run. Parallel siblings that don't
+ *     consume `from`'s output are preserved. Default false keeps the
+ *     original "from → end of AGENT_ORDER" semantics.
+ * Cost cap applies to the resumed run only; preserved stepLog entries
+ * do not count against the new cap.
  */
 export async function runFromAgent(
   ctx: PipelineContext,
   from: AgentName,
   runtime: AgentRuntime,
-  options?: OrchestratorOptions
+  options?: RunFromAgentOptions
 ): Promise<PipelineContext> {
   const costCap = resolveCostCap(options);
-  const { retained, dropped } = splitContextAt(ctx, from);
-  const resumed = await executePipelineFrom(retained, from, runtime, costCap);
-  // Prior flags+stepLog entries from dropped agents are intentionally
-  // discarded. They represent results we just overwrote.
+  const runSet = runSetFor(from, options?.isolate ?? false);
+  const { retained, dropped } = splitContextByRunSet(ctx, runSet);
   void dropped;
-  return resumed;
+  return executePipelineWithRunSet(retained, runSet, runtime, costCap);
 }
 
 const AGENT_ORDER: AgentName[] = ["strategy", "copy", "photo", "brand", "compliance"];
@@ -119,25 +155,23 @@ interface SplitResult {
   dropped: { stepLog: PipelineContext["stepLog"]; flags: PipelineContext["flags"] };
 }
 
-function splitContextAt(ctx: PipelineContext, from: AgentName): SplitResult {
-  // Keep any agent step + flag that ran BEFORE `from`; discard everything
-  // from `from` onward so re-runs start clean.
-  const fromIndex = AGENT_ORDER.indexOf(from);
-  const priorAgents = new Set(AGENT_ORDER.slice(0, fromIndex));
-  const retainedStepLog = ctx.stepLog.filter((s) => priorAgents.has(s.agent));
-  const retainedFlags = ctx.flags.filter((f) => priorAgents.has(f.agent));
-  const droppedStepLog = ctx.stepLog.filter((s) => !priorAgents.has(s.agent));
-  const droppedFlags = ctx.flags.filter((f) => !priorAgents.has(f.agent));
+/** Remove stepLog entries + context fields owned by agents in the run set.
+ *  Preserve everything outside the run set so parallel siblings or earlier
+ *  agents survive the re-run. */
+function splitContextByRunSet(ctx: PipelineContext, runSet: Set<AgentName>): SplitResult {
+  const retainedStepLog = ctx.stepLog.filter((s) => !runSet.has(s.agent));
+  const retainedFlags = ctx.flags.filter((f) => !runSet.has(f.agent));
+  const droppedStepLog = ctx.stepLog.filter((s) => runSet.has(s.agent));
+  const droppedFlags = ctx.flags.filter((f) => runSet.has(f.agent));
 
-  // Also clear fields owned by agents at/after `from`.
   const cleared: PipelineContext = { ...ctx, flags: retainedFlags, stepLog: retainedStepLog };
-  if (!priorAgents.has("strategy")) cleared.brief = undefined;
-  if (!priorAgents.has("copy")) cleared.variants = undefined;
-  if (!priorAgents.has("photo")) {
+  if (runSet.has("strategy")) cleared.brief = undefined;
+  if (runSet.has("copy")) cleared.variants = undefined;
+  if (runSet.has("photo")) {
     cleared.imagePrompt = undefined;
     cleared.imageUrl = undefined;
   }
-  if (!priorAgents.has("brand")) {
+  if (runSet.has("brand")) {
     cleared.variants = cleared.variants?.map((v) => ({
       ...v,
       brandScore: undefined,
@@ -152,28 +186,30 @@ function splitContextAt(ctx: PipelineContext, from: AgentName): SplitResult {
   };
 }
 
-async function executePipelineFrom(
+/** Execute the canonical pipeline order, but only call agents whose names
+ *  are in runSet. Preserves parallelism for Copy + Photo when both are
+ *  included. */
+async function executePipelineWithRunSet(
   startCtx: PipelineContext,
-  from: AgentName,
+  runSet: Set<AgentName>,
   runtime: AgentRuntime,
   costCap: number
 ): Promise<PipelineContext> {
-  const fromIndex = AGENT_ORDER.indexOf(from);
   let ctx = startCtx;
   const startingCost = totalCost(ctx);
 
   // 1. Strategy
-  if (fromIndex <= AGENT_ORDER.indexOf("strategy")) {
+  if (runSet.has("strategy")) {
     ctx = await runStrategy(ctx, runtime);
     if (capExceeded(ctx, startingCost, costCap)) {
       return appendCapFlag(ctx);
     }
   }
 
-  // 2. Copy + Photo in parallel
-  if (fromIndex <= AGENT_ORDER.indexOf("photo")) {
-    const needsCopy = fromIndex <= AGENT_ORDER.indexOf("copy");
-    const needsPhoto = fromIndex <= AGENT_ORDER.indexOf("photo");
+  // 2. Copy + Photo in parallel — both, one, or neither.
+  const needsCopy = runSet.has("copy");
+  const needsPhoto = runSet.has("photo");
+  if (needsCopy || needsPhoto) {
     const copyPromise = needsCopy ? runCopy(ctx, runtime) : Promise.resolve(ctx);
     const photoPromise = needsPhoto ? runPhoto(ctx, runtime) : Promise.resolve(ctx);
     const [copyCtx, photoCtx] = await Promise.all([copyPromise, photoPromise]);
@@ -184,7 +220,7 @@ async function executePipelineFrom(
   }
 
   // 3. Brand
-  if (fromIndex <= AGENT_ORDER.indexOf("brand")) {
+  if (runSet.has("brand")) {
     ctx = await runBrand(ctx, runtime);
     ctx = autoSelectVariant(ctx);
     if (capExceeded(ctx, startingCost, costCap)) {
@@ -193,7 +229,7 @@ async function executePipelineFrom(
   }
 
   // 4. Compliance
-  if (fromIndex <= AGENT_ORDER.indexOf("compliance")) {
+  if (runSet.has("compliance")) {
     ctx = await runCompliance(ctx, runtime);
   }
 

@@ -13,6 +13,7 @@
 // codebase migrates off PostgREST-only writes. Tracked alongside the
 // lifecycle emissions in /api/assets/[id]/publish|retry|destination.
 
+import { randomUUID } from "node:crypto";
 import { buildPipelineAuditInserts } from "@/lib/agents/audit";
 import { runPipeline, type OrchestratorOptions } from "@/lib/agents/orchestrator";
 import {
@@ -41,6 +42,7 @@ export type RunAndPersistResult =
       asset: Asset;
       ctx: PipelineContext;
       durationMs: number;
+      pipelineRunId: string;
       auditEventCount: number;
       auditError?: unknown;
     }
@@ -82,6 +84,10 @@ export async function runAndPersistPipeline(
     };
   }
 
+  // Generate the pipeline_runs.id upfront so we can thread it into audit
+  // metadata without a round-trip to the DB.
+  const runId = randomUUID();
+
   let asset: Asset;
   try {
     const persisted = await persistPipelineResult(params.supabase, {
@@ -91,7 +97,8 @@ export async function runAndPersistPipeline(
       conversationId: params.conversationId,
       prompt: params.prompt,
       ctx,
-      durationMs
+      durationMs,
+      runId
     });
     asset = persisted.asset;
   } catch (error) {
@@ -102,7 +109,8 @@ export async function runAndPersistPipeline(
   const auditRows = buildPipelineAuditInserts({
     assetId: asset.id,
     userId: params.userId,
-    ctx
+    ctx,
+    runId
   });
 
   let auditError: unknown;
@@ -116,6 +124,7 @@ export async function runAndPersistPipeline(
     asset,
     ctx,
     durationMs,
+    pipelineRunId: runId,
     auditEventCount: auditRows.length,
     ...(auditError !== undefined ? { auditError } : {})
   };
